@@ -48,23 +48,39 @@ When re-installing from scratch, switching branches, or rebuilding on this machi
 
 Open `strata-swift-iq2_xs.json` and ensure these entries are present:
 
-1. In `"env"`:
+1. At top-level:
+   ```json
+   "expert_profile_save": "data/expert-profile-learned.bin",
+   "expert_profile_save_every": 10,
+   ```
+2. In `"env"`:
    ```json
    "env": {
      "STRATA_PF_FUSED": "1",
      "STRATA_RESIDENT_HEADROOM_GIB": "6",
      "STRATA_SPEC_COUPLED": "1",
      "STRATA_PIN_BY_NEED": "1",
-     "STRATA_PCIE_MIN1": "1"
+     "STRATA_PCIE_MIN1": "1",
+     "STRATA_SPEC_GUMBEL": "1",
+     "STRATA_RAM_ADAPT": "2",
+     "STRATA_RAM_ADAPT2": "1",
+     "STRATA_DEQUANT_WIDE": "1",
+     "STRATA_PROMPT_ATTN_IMMA": "1",
+     "STRATA_ATTN_DAILY": "1",
+     "STRATA_GU_SWIGLU": "1",
+     "STRATA_GR_UP75": "1",
+     "STRATA_QSA_ROWS": "1",
+     "STRATA_SIDE_MIXER": "2"
    }
    ```
-2. In `"args"` (append to list):
+3. In `"args"` (append to list):
    ```json
    "--mtp-window",
    "8192",
    "--adapt-async",
    "1",
-   "--expert-profile-save"
+   "--host-core",
+   "sibling"
    ```
 
 ### Step 3: Hardware Calibration
@@ -85,23 +101,34 @@ _(Runs on-card sweeps across PCIe share, speculative drafting depth, and adaptiv
 
 ## 2. Why Each Setting Was Chosen
 
-| Setting                                | Value                     | Why / Benefit                                                                                                                            |
-| -------------------------------------- | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `--vision cpu`                         | CPU reader (8 threads)    | **Frees ~1.4 GB VRAM**. Offloading vision to CPU allows the GPU to maximize expert slots.                                                |
-| `--draft-vocab en`                     | English/code head         | **Saves ~110 MiB VRAM & +1-2% decode**. Drops unneeded CJK tokens from draft head.                                                       |
-| `--vram-reserve-mib 1600`              | Fixed VRAM headroom       | **Eliminates WDDM page eviction cliff**. Prevents Windows 11 DWM from dropping speed from 50 tok/s to 2 tok/s on deep 100K-262K context. |
-| `--kv k8v4`                            | Mixed INT8 K + 4-bit V    | **Halves VRAM consumption for KV cache** over standard INT8, allowing full 262,144 context without blowing out 24 GB VRAM.               |
-| `context 262144`                       | Exact trained window      | Native context length; avoids RoPE scaling / YaRN degradation.                                                                           |
-| `STRATA_PF_FUSED=1`                    | Fused int8 prompt kernels | **+12% prompt speed at 4K, +3% at 32K** (`DETAILS.md:26-27`) by running prompt experts on tensor-core GEMMs.                             |
-| `--mtp-window 8192`                    | Bounded MTP attention     | Caps attention span during speculative draft verification to keep decode overhead low at long contexts.                                  |
-| `--adapt-async 1`                      | Async expert swapping     | **+7% to +11% decode speed** (`DETAILS.md:202`) by asynchronously overlapping RAM-to-VRAM expert swaps with token decoding.              |
-| `--expert-profile-save`                | Persistent cache learning | Saves real-world routing frequency to `expert-profile.bin`, increasing cache hits closer to 99% over time.                               |
-| `STRATA_PIN_BY_NEED=1` / `PCIE_MIN1=1` | PCIe miss activation      | Fixes `pcie_share 0.0` symptom; forces PCIe lane to activate even for low miss counts (+5-7% prompt speed).                              |
-| `STRATA_RESIDENT_HEADROOM_GIB=6`       | RAM headroom guard        | Prevents Windows 11 working set memory trimming on 32 GB RAM systems.                                                                    |
-| `STRATA_SPEC_COUPLED=1`                | Coupled draft sampling    | Couples speculative draft RNG with target model distribution, raising draft acceptance rates to 68-75%.                                  |
-| `--pcie-frac 1.00`                     | Empirical PCIe share      | Swept by calibration (105-113 tok/s across all share rates, 1.00 peaked highest).                                                        |
-| `--spec-min-p 0.70`                    | Acceptance threshold      | Swept by calibration (best draft threshold on 14.4 GB resident RAM; 113.6-120.6 tok/s bursts).                                           |
-| `--adapt-swaps 160`                    | Adaptive tier swaps       | Swept by calibration (measured an all-time record **91.9 tok/s** in the 512-token sustained stress test).                                |
+| Setting                                | Value                          | Why / Benefit                                                                                                                                                                              |
+| -------------------------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `--vision cpu`                         | CPU reader (8 threads)         | **Frees ~1.4 GB VRAM**. Offloading vision to CPU allows the GPU to maximize expert slots.                                                                                                  |
+| `--draft-vocab en`                     | English/code head              | **Saves ~110 MiB VRAM & +1-2% decode**. Drops unneeded CJK tokens from draft head.                                                                                                         |
+| `--vram-reserve-mib 1600`              | Fixed VRAM headroom            | **Eliminates WDDM page eviction cliff**. Prevents Windows 11 DWM from dropping speed from 50 tok/s to 2 tok/s on deep 100K-262K context.                                                   |
+| `--kv k8v4`                            | Mixed INT8 K + 4-bit V         | **Halves VRAM consumption for KV cache** over standard INT8, allowing full 262,144 context without blowing out 24 GB VRAM.                                                                 |
+| `context 262144`                       | Exact trained window           | Native context length; avoids RoPE scaling / YaRN degradation.                                                                                                                             |
+| `STRATA_PF_FUSED=1`                    | Fused int8 prompt kernels      | **+12% prompt speed at 4K, +3% at 32K** (`DETAILS.md:26-27`) by running prompt experts on tensor-core GEMMs.                                                                               |
+| `--mtp-window 8192`                    | Bounded MTP attention          | Caps attention span during speculative draft verification to keep decode overhead low at long contexts.                                                                                    |
+| `--adapt-async 1`                      | Async expert swapping          | **+7% to +11% decode speed** (`DETAILS.md:202`) by asynchronously overlapping RAM-to-VRAM expert swaps with token decoding.                                                                |
+| `--host-core sibling`                  | SMT host core isolation        | Moves host scheduler to Core 0 SMT sibling (Logical Processor 1), leaving Processor 0 free for Windows 11 GPU driver interrupts (+3-5%).                                                   |
+| `STRATA_PIN_BY_NEED=1` / `PCIE_MIN1=1` | PCIe miss activation           | Fixes `pcie_share 0.0` symptom; forces PCIe lane to activate even for low miss counts (+5-7% prompt speed).                                                                                |
+| `STRATA_RESIDENT_HEADROOM_GIB=6`       | RAM headroom guard             | Prevents Windows 11 working set memory trimming on 32 GB RAM systems.                                                                                                                      |
+| `STRATA_SPEC_COUPLED=1`                | Coupled draft sampling         | Couples speculative draft RNG with target model distribution, raising draft acceptance rates to 68-75%.                                                                                    |
+| `--pcie-frac 1.00`                     | Empirical PCIe share           | Swept by calibration (105-113 tok/s across all share rates, 1.00 peaked highest).                                                                                                          |
+| `--spec-min-p 0.70`                    | Acceptance threshold           | Swept by calibration (best draft threshold on 14.4 GB resident RAM; 113.6-120.6 tok/s bursts).                                                                                             |
+| `--adapt-swaps 160`                    | Adaptive tier swaps            | Swept by calibration (measured an all-time record **91.9 tok/s** in the 512-token sustained stress test).                                                                                  |
+| `STRATA_SPEC_GUMBEL=1`                 | Gumbel-Max noise coupling      | Replaces softmax draft coupling with Gumbel-max noise matching, raising speculative draft acceptance rates with zero VRAM/RAM cost.                                                        |
+| `STRATA_RAM_ADAPT=2`                   | Dynamic resident RAM sync      | Swaps out dormant experts in the 18.22 GiB RAM pool with active conversation experts; cuts repeated SSD reads per token from 14 to ~2.7.                                                   |
+| `STRATA_RAM_ADAPT2=1`                  | Async RAM promotion I/O        | Stages RAM expert promotions in the background on a dedicated I/O thread, avoiding GPU decode stalls during RAM updates.                                                                   |
+| `STRATA_DEQUANT_WIDE=1`                | Ada wide dequantization        | Bypasses hardcoded `sm_86` default to enable 16-bit loads / 16-byte stores on RTX 4090 (Ada sm_89); cuts **11% to 15% off TTFT**.                                                          |
+| `STRATA_PROMPT_ATTN_IMMA=1`            | INT8 Tensor Core Attention     | Routes `--kv k8v4` attention matrix products directly into Ada 4th-Gen INT8 Tensor Cores; **+2.5% prompt prefill throughput**.                                                             |
+| `STRATA_ATTN_DAILY=1`                  | Warp-synchronous decode attn   | Replaces upstream chunked decode attention with warp-synchronous reduction kernel (+1.5% to +3% decode).                                                                                   |
+| `STRATA_GU_SWIGLU=1`                   | Fused gate/up + SwiGLU launch  | Fuses gate/up projection, SwiGLU activation, and Q8_1 quantization into a single CUDA kernel launch, cutting kernel launch overhead.                                                       |
+| `STRATA_GR_UP75=1`                     | Staged group-reduction up-proj | Optimizes multi-token verification window group-reduction up-projection via sm_75+ tensor-core staging (+1% to +1.5% decode).                                                              |
+| `STRATA_QSA_ROWS=1`                    | Low-query QSA block scores     | Optimizes QSA block score calculations for small query counts (NQ <= 4), reducing warp stalls during expert routing.                                                                       |
+| `STRATA_SIDE_MIXER=2`                  | Async side mixer execution     | Runs GDN gate projections and QSA indexing asynchronously on a secondary CUDA stream alongside layer projections.                                                                          |
+| `expert_profile_save`                  | Learned profile persistence    | Automatically saves the active expert routing table to `data/expert-profile-learned.bin` every 10 min and on exit; future launches load this file to eliminate the cold-start warmup ramp. |
 
 ---
 
