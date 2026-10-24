@@ -16,7 +16,7 @@ When re-installing from scratch, switching branches, or rebuilding on this machi
 
 ### Step 0: Mandatory OS-Level Prerequisite — Virtual Memory (Pagefile)
 
-> **Critical Prerequisite:** On Windows with 32 GB RAM, the default Windows Commit Limit (~42 GB) is too small. Strata requires ~55–65 GB of commit space to allocate its 14.4 GB page-locked resident RAM complement. Without this, Strata refuses resident RAM and falls back to slow SSD mmap. **Configure this first before installing models.**
+> **Why this is mandatory:** On Windows with 32 GB RAM, the default commit limit (~42 GB) is too small. Strata requires ~55–65 GB of commit space to allocate its ~19 GB page-locked resident RAM expert complement. Without this, Strata refuses resident RAM and falls back to slow SSD mmap (dropping speed to 17–32 tok/s). **Configure this first before installing models or running scripts.**
 
 #### Step-by-Step Configuration Guide (English / 中文輔助)
 
@@ -83,6 +83,41 @@ Open `strata-swift-iq2_xs.json` and ensure these entries are present:
    "sibling"
    ```
 
+---
+
+## 2. Daily Routine & Verification (After Reboots)
+
+### Daily Startup Command
+
+You do **NOT** need to rerun Setup (Step 1) or Calibration (Step 3) after reboots. Simply start the server:
+
+```powershell
+.\START-HERE.bat --host 0.0.0.0 --api-key sk-strata-local --port 8081
+```
+
+### Golden Health Verification Checklist
+
+When the server boots up, check the terminal / `strata-swift-iq2_xs.log` for these 4 golden lines:
+
+1. `resident RAM mode: 19.0x GiB of experts in RAM (locked)` — confirms ~19 GB experts are locked in RAM with 0 SSD file stalls.
+2. `expert cache 10067 slots, 13.48 GiB of VRAM` — confirms GPU VRAM cache is fully populated.
+3. `the host thread on 1 (draining too) (--host-core sibling)` — confirms the host scheduler moved to Core 0 Thread 1, leaving Thread 0 free for Windows 11 GPU driver interrupts.
+4. `--expert-profile data/expert-profile-learned.bin` — confirms your real-world coding expert routing distribution is pre-loaded.
+
+---
+
+## 3. What to NEVER Touch (Traps & False Optimizations)
+
+When researching forums, GitHub issues, or AI suggestions months later, avoid these 5 known traps:
+
+- ❌ **Do NOT enable `--kv-resident`**: On a 32 GB RAM machine, offloading KV cache to host RAM steals budget from resident experts, triggering massive SSD re-reads.
+- ❌ **Do NOT set `--conversation-cache-mib` > 0**: Forcing conversation snapshots into host RAM exceeds physical memory at deep 150K+ context, causing Windows WDDM working set page trimming and severe stutter.
+- ❌ **Do NOT set `--prefill auto:32768`**: Official repo benchmarks (#834 #669) prove 32K prompt chunks run **~3x slower** on 32 GB RAM. Keep `--prefill auto` (8,192 chunk).
+- ❌ **Do NOT switch to `--draft dflash2`**: Requires an unbuilt model pack and consumes 1.2 GB VRAM; MTP with Gumbel noise already achieves 78%–88% acceptance on this card.
+- ❌ **Do NOT raise power limit to 510W (`nvidia-smi -pl 510`)**: Decode consumes only ~266W on the RTX 4090; raising power adds heat and fan noise with 0.0 tok/s gain.
+
+---
+
 ### Step 3: Hardware Calibration
 
 ```powershell
@@ -99,7 +134,7 @@ _(Runs on-card sweeps across PCIe share, speculative drafting depth, and adaptiv
 
 ---
 
-## 2. Why Each Setting Was Chosen
+## 4. Why Each Setting Was Chosen
 
 | Setting                                | Value                          | Why / Benefit                                                                                                                                                                              |
 | -------------------------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -132,17 +167,24 @@ _(Runs on-card sweeps across PCIe share, speculative drafting depth, and adaptiv
 
 ---
 
-## 3. Performance Ceiling & Upstream Upgrade Guide
+## 5. Performance Ceiling & Hardware Upgrade Guide
 
-### Why is speed bounded at ~100–113 tok/s peak / ~50–60 tok/s sustained?
+### Real-World Measured Performance (Cycle 11 Verified)
 
-- **32 GB RAM bottleneck:** Swift IQ2_XS requires ~36–40 GB to hold all experts in memory. On 32 GB RAM, un-cached experts (~5-8 GB) must stream from SSD (`--resident-experts`).
-- **Zen 2 memory bus:** Host-to-GPU expert transfers over DDR4 are bounded by CPU memory bandwidth (~25.6 GB/s), not the RTX 4090.
-- _Only hardware upgrade that radically shifts this:_ 64 GB RAM (eliminates SSD streaming entirely, unlocking 120-150+ tok/s).
+- **Prompt Ingestion:** ~1,400 – 1,870 tok/s
+- **Sustained Decode:** ~105 – 120 tok/s across deep contexts
+- **Tested Maximum Context:** **197,583 tokens (~200K)** with zero memory errors or throttling.
+
+### Why is speed bounded at ~110–120 tok/s?
+
+- **32 GB RAM Hardware Limit:** Swift IQ2_XS requires ~33–36 GB to hold all experts in memory. On 32 GB RAM, ~19 GB is locked in RAM and ~13.5 GB is in VRAM. The remaining uncached tail experts stream over DDR4 dual-channel memory (~25.6 GB/s).
+- **The Only Hardware Upgrade That Breaks This:** Upgrading to **64 GB RAM (2×32GB DDR4)** will allow 100% of the model weights to stay resident in system RAM, completely eliminating the SSD file tier and boosting decode throughput to **120–150+ tok/s**.
 
 ---
 
-## 4. Resizable BAR (ReBAR) Status & BIOS Enable Guide
+## 6. Resizable BAR (ReBAR) Status & BIOS Enable Guide
+
+_(One-time motherboard BIOS setup: expands GPU BAR1 window from 256 MiB to 32 GB so CPU addresses full 24 GB VRAM directly)._
 
 - **Hardware Status:** BAR1 Total is now **32,768 MiB (32 GB)** — **Resizable BAR is ACTIVE and VERIFIED**!
 - **Motherboard Identified:** `Gigabyte X570 AORUS ELITE` (BIOS Version: `F32`).
