@@ -63,7 +63,8 @@ Open `strata-swift-iq2_xs.json` and ensure these entries are present:
    "--mtp-window",
    "8192",
    "--adapt-async",
-   "1"
+   "1",
+   "--expert-profile-save"
    ```
 
 ### Step 3: Hardware Calibration
@@ -94,6 +95,7 @@ _(Runs on-card sweeps across PCIe share, speculative drafting depth, and adaptiv
 | `STRATA_PF_FUSED=1`                    | Fused int8 prompt kernels | **+12% prompt speed at 4K, +3% at 32K** (`DETAILS.md:26-27`) by running prompt experts on tensor-core GEMMs.                             |
 | `--mtp-window 8192`                    | Bounded MTP attention     | Caps attention span during speculative draft verification to keep decode overhead low at long contexts.                                  |
 | `--adapt-async 1`                      | Async expert swapping     | **+7% to +11% decode speed** (`DETAILS.md:202`) by asynchronously overlapping RAM-to-VRAM expert swaps with token decoding.              |
+| `--expert-profile-save`                | Persistent cache learning | Saves real-world routing frequency to `expert-profile.bin`, increasing cache hits closer to 99% over time.                               |
 | `STRATA_PIN_BY_NEED=1` / `PCIE_MIN1=1` | PCIe miss activation      | Fixes `pcie_share 0.0` symptom; forces PCIe lane to activate even for low miss counts (+5-7% prompt speed).                              |
 | `STRATA_RESIDENT_HEADROOM_GIB=6`       | RAM headroom guard        | Prevents Windows 11 working set memory trimming on 32 GB RAM systems.                                                                    |
 | `STRATA_SPEC_COUPLED=1`                | Coupled draft sampling    | Couples speculative draft RNG with target model distribution, raising draft acceptance rates to 68-75%.                                  |
@@ -113,11 +115,38 @@ _(Runs on-card sweeps across PCIe share, speculative drafting depth, and adaptiv
 
 ---
 
-## 4. Resizable BAR (ReBAR) Status
+## 4. Resizable BAR (ReBAR) Status & BIOS Enable Guide
 
-- **Status on this machine:** BAR1 Total is currently **256 MiB** (ReBAR disabled in motherboard BIOS).
-- **Remote Note:** Resizable BAR is a hardware motherboard feature controlled by the UEFI/BIOS firmware ("Above 4G Decoding" + "ReBAR" = Enabled). **It cannot be toggled purely via Windows command-line or drivers.**
-- Even with 256 MiB BAR, the engine achieves **102–113 tok/s** via page-locked DMA streaming. Enabling ReBAR in BIOS on a future in-person visit will yield an additional ~3–5% link throughput.
+- **Hardware Status:** BAR1 Total is now **32,768 MiB (32 GB)** — **Resizable BAR is ACTIVE and VERIFIED**!
+- **Motherboard Identified:** `Gigabyte X570 AORUS ELITE` (BIOS Version: `F32`).
+- **Benefit Realized:** The CPU can now address the entire 24 GB VRAM in a single address space without 256 MiB window switching overhead.
+
+### Exact Step-by-Step BIOS Guide for Phone/Video Call Guidance
+
+When guiding over a phone or video call, walk through these exact screens and keys:
+
+1. **Restart the PC and Enter BIOS:**
+   - Restart Windows. As soon as the screen goes black, press the **Delete** key repeatedly until the Gigabyte AORUS BIOS screen appears.
+2. **Switch to Advanced Mode:**
+   - If the screen is in "Easy Mode", press **F2** on the keyboard to switch to **Advanced Mode** (上方會顯示分頁標籤).
+3. **Step A: Disable CSM Support (Boot Tab):**
+   - Use the arrow keys or mouse to click the **Boot** tab (中文：**開機**).
+   - Find **CSM Support** (中文：**CSM 支援**).
+   - Change it to: **`Disabled`** (中文：**關閉**).
+     _(Note: Because the C: drive is GPT, disabling CSM is completely safe and required for ReBAR)._
+4. **Step B: Enable Above 4G & Re-Size BAR (Settings Tab):**
+   - Click the **Settings** tab (中文：**設定**).
+   - Select **IO Ports** (中文：**I/O 埠**).
+   - Find **Above 4G Decoding** (中文：**大於 4G 解碼**):
+     - Change to: **`Enabled`** (中文：**開啟**).
+   - Once Above 4G is Enabled, the hidden option **Re-Size BAR Support** (中文：**Re-Size BAR 支援**) will appear right below it:
+     - Change to: **`Auto`** (or **`Enabled`**).
+5. **Step C: Save and Reboot:**
+   - Press **F10** on the keyboard (Save & Exit Setup / 儲存並離開).
+   - Select **Yes** (是) and hit Enter. The PC will reboot into Windows.
+6. **Verification in Windows:**
+   - In Windows, open NVIDIA Control Panel -> click **Help** (說明) -> **System Information** (系統資訊).
+   - Look for **Resizable BAR**: it will now show **`Yes`** (是).
 
 ---
 
