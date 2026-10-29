@@ -87,6 +87,20 @@ from serve import responses as responses_api  # noqa: E402
 from serve.responses import ResponsesError, error_body as responses_error_body  # noqa: E402
 from serve import images as images_api  # noqa: E402
 
+
+def _stamp() -> str:
+    """`2026-10-29T16:16:58+08:00` - the local date, the time and the UTC offset of a log line.
+
+    A progress line is read long after the run it belongs to, and its elapsed seconds place it nowhere: the same line
+    on the console, in the log file and in a support report has to say when it happened and in which zone, or two
+    machines' logs cannot be laid against each other (across a daylight-saving change included)."""
+    now = time.time()
+    offset = -(time.altzone if time.localtime(now).tm_isdst else time.timezone)
+    sign = "+" if offset >= 0 else "-"
+    offset = abs(offset)
+    return (f"{time.strftime('%Y-%m-%dT%H:%M:%S', time.localtime(now))}"
+            f"{sign}{offset // 3600:02d}:{offset % 3600 // 60:02d}")
+
 IM_END = "<|im_end|>"
 IMAGE_PAD = "<|image_pad|>"
 
@@ -1042,7 +1056,7 @@ class StrataEngine:
                 threading.Thread(target=echo_requests, args=(log, os.path.getsize(log)), daemon=True).start()
         if log:                                          # #779: when an engine started (a crash report has the time)
             try:
-                self.log.write(f"[strata] {time.strftime('%Y-%m-%d %H:%M:%S')} engine started: {exe} --serve "
+                self.log.write(f"[strata] {_stamp()} engine started: {exe} --serve "
                                f"{' '.join(args)}\n")
                 self.log.flush()
             except OSError:
@@ -5241,6 +5255,20 @@ class Service:
                     s["phase"] = "tool call complete"
                 s["tail"] = ((s.get("tail") or "") + (ev.text or ""))[-600:]
 
+    def _say(self, line: str) -> None:
+        """A progress line to the console and, when the engine has one, to its log file.
+
+        The launcher pipes this process's stdout for the console alone, so a line printed here reached a person
+        watching the window and nothing else: the log a run is read from afterwards never held it."""
+        print(line, flush=True)
+        log = getattr(self.engine, "log", None)
+        if hasattr(log, "write"):                      # a file when --log was given, subprocess.DEVNULL otherwise
+            try:
+                log.write(line + "\n")
+                log.flush()
+            except (OSError, ValueError):
+                pass
+
     def _progress(self, last_print, every=1.0, st=None):
         """A progress line in the server window every `every` seconds while a request runs."""
         now = time.time()
@@ -5252,14 +5280,14 @@ class Service:
         if s.get("first_token") is None:
             pr = getattr(self.engine, "progress", None)   # (position reached, prompt tokens): a reused prefix counts
             done = f"{pr[0]:,} of {pr[1]:,}" if pr and pr[1] else f"{s.get('prompt_tokens', 0):,}"   # as read (#29)
-            print(f"[strata] reading the prompt: {done} tokens, {el:.0f} s so far", flush=True)
+            self._say(f"[strata] {_stamp()} reading the prompt: {done} tokens, {el:.0f} s so far")
         else:
             rate = s["generated"] / max(RATE_MIN_SPAN_S, now - s["first_token"])
             # #984: while a thinking budget applies, the thinking line shows it, not the request's max_tokens
             limit = (f"budget {s['thinking_budget']} (max {s.get('max_tokens')})"
                      if s["phase"] == "thinking" and s.get("thinking_budget") else f"max {s.get('max_tokens')}")
-            print(f"[strata] {s['phase']}: {s['generated']} of {limit} tokens, {rate:.1f} tok/s, "
-                  f"{el:.0f} s", flush=True)
+            self._say(f"[strata] {_stamp()} {s['phase']}: {s['generated']} of {limit} tokens, "
+                      f"{rate:.1f} tok/s, {el:.0f} s")
         return now
 
     def run(self, ids, thinking, tools, max_new, sampling, cancel, force=None,
@@ -5746,12 +5774,12 @@ class Service:
                             if hit_msg and pcie_share:
                                 hit_msg += f" (+{pcie_share*100:.1f}% of the routed experts over PCIe)"
                             rate_txt = f"{rate:.1f} tok/s" if rate is not None else "no speed"
-                            print(f"[strata] done: {n} tokens in {el:.0f} s ({rate_txt}) "
-                                  f"({finish}, cancel={cancel.is_set()}){hit_msg}", flush=True)
+                            self._say(f"[strata] {_stamp()} done: {n} tokens in {el:.0f} s ({rate_txt}) "
+                                      f"({finish}, cancel={cancel.is_set()}){hit_msg}")
                             if finish == "length" and parser.state in ("reasoning", "rcall"):   # #530
-                                print("[strata] the reply reached max tokens while still thinking, so it has no "
-                                      "answer: a thinking budget (reasoning_budget_tokens, in the request or in "
-                                      "strata-<model>.json for every request) leaves room to answer", flush=True)
+                                self._say(f"[strata] {_stamp()} the reply reached max tokens while still thinking, "
+                                          "so it has no answer: a thinking budget (reasoning_budget_tokens, in the "
+                                          "request or in strata-<model>.json for every request) leaves room to answer")
                             if os.environ.get("STRATA_DEBUG") and raw_ids:
                                 print(f"[strata] raw: {self.tok.decode(raw_ids)!r}", flush=True)
                                 print(f"[strata] raw ids: {list(raw_ids)}", flush=True)

@@ -4378,6 +4378,33 @@ class ThinkingBudget(unittest.TestCase):
         self.assertIn("answering: 10 of max 6400 tokens", lines[1])
         self.assertIn("thinking: 10 of max 6400 tokens", lines[2])
 
+    def test_a_progress_line_carries_the_local_date_time_and_utc_offset(self):
+        """A progress line is read long after it was written, and it used to show only the elapsed seconds: "thinking:
+        91 of budget ... 9 s" cannot be placed on a timeline or in a time zone.  It carries the local date, the time
+        and the UTC offset, so the console and the log file agree on when the line happened."""
+        st = {"phase": "thinking", "generated": 10, "first_token": time.time() - 1, "started": time.time() - 2,
+              "max_tokens": 6400, "thinking_budget": 2048}
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.svc._progress(0, st=st)
+        line = out.getvalue().splitlines()[0]
+        stamp = line.split(" ")[1]                       # "[strata] <stamp> thinking: ..."
+        self.assertRegex(stamp, r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}$")
+        self.assertIn("thinking: 10 of budget 2048 (max 6400) tokens", line)
+
+    def test_the_done_line_carries_the_local_date_time_and_utc_offset(self):
+        """The per-request summary is the line a person scans in a long run, and 'done: 89 tokens in 19 s'
+        alone says nothing about when it happened.  It carries the same local date, time and UTC offset as
+        the progress lines, so a console and a log can be laid against each other."""
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code, b = self.openai(max_tokens=64)
+        self.assertEqual(code, 200, b)
+        done = [l for l in out.getvalue().splitlines() if "done:" in l]
+        self.assertTrue(done, out.getvalue())
+        stamp = done[0].split(" ")[1]                    # "[strata] <stamp> done: ..."
+        self.assertRegex(stamp, r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}$")
+
     def test_a_budget_above_max_tokens_is_capped_to_leave_room_for_the_answer(self):
         """#984: max_tokens 300 and a budget of 5000 never fired: the reply ended while still thinking.  The thinking
         is closed at max_tokens less the answer's reserve (max 512 or a quarter, at most half), with one log line."""
