@@ -325,6 +325,214 @@ server, `Rename-Item engine "engine-<newver>"`, then `Rename-Item "engine-<oldve
 
 Append-only record. Newest first. Keep the procedure in §7 clean — evidence lives here.
 
+### 2026-10-29 — parking reverted: single session only; timestamps in the log
+
+**Decision:** back to one session. `--conversation-cache-mib 0` (explicitly **zero**, never absent),
+`--conversation-cache-slots` and `--conversation-cache-min-free-mib` removed, `STRATA_PARK_ASYNC` removed,
+`STRATA_RESIDENT_HEADROOM_GIB` 10 → **6**. Args 47 → 43, env 16 → 15.
+
+**Why: the park ceiling is ~28K tokens, so parking cannot hold an agent session.**
+
+| Metric                  | Value                                        |
+| ----------------------- | -------------------------------------------- |
+| `skip parking` failures | 900 (492 RAM admission, 408 snapshot budget) |
+| Park events             | 593                                          |
+| Parks ≥ 1,000 tokens    | **4** — 9,985 / 10,662 / 26,615 / 28,179     |
+| Restores ≥ 1,000 tokens | **2** — 9,861 / 10,558                       |
+| A cold Pi session       | 25,450–27,746 tokens, `reused 0`             |
+
+The largest park ever achieved (28,179) leaves only ~400–1,600 tokens above a bare Pi system prompt, so
+parking held a greeting and never a working conversation.
+
+**The real cost was the headroom raised for parking.** At 10 GiB the full 19.56 GiB complement no longer
+fitted, and the engine said so on 45 of 55 boots: `resident complement 19.56 GiB exceeds available RAM
+(24.95 GiB) minus the 10 GiB safety headroom`. Resident experts fell from **19.66–20.58 GiB** (27 boots at
+6 GiB headroom) to **13.43–15.98 GiB** (18 boots at 10 GiB): **−3.6 to −7.2 GiB (−18% to −35%)**. File blob
+reads went from 2 to as many as 6,833,263 in one session, and the expert-cache hit rate fell from ~96.5% to
+~90%.
+
+**After the revert** (boot 2026-10-29 16:18:37, 27.77 GiB free at launch):
+
+| Reading                    | Before (10 GiB) | After (6 GiB) |
+| -------------------------- | --------------: | ------------: |
+| Resident experts           |       14.33 GiB | **18.97 GiB** |
+| `room for the complement`  |       14.30 GiB | **18.97 GiB** |
+| Drive reads per 32K prompt |        ~34.9 GB |   **~4.1 GB** |
+| `conversation cache` lines |       900 skips |         **0** |
+
+**Still 0.59 GiB short.** Available RAM was 25.22 GiB and the full complement needs ≥ 25.81 GiB at 6 GiB
+headroom, so the warning persists. That is a boot-time RAM limit, not the constant: launch with background
+applications closed, or test headroom 5 (fits at ≥ 24.81 GiB). Headroom 5 has **not** been tested.
+
+**Decode: no proven change.** 600-token generations at short context measured 128.9 / 158.6 / 152.9 tok/s
+(median 152.9); at ~24K context 94.1–184.0 (median 111.2). Both sit inside the historical band (122.4 at
+19.02 GiB; 126.6 deep-gen), so the +4.64 GiB of resident experts is **not demonstrated in tok/s**. The
+proven wins are fewer drive reads and zero parking overhead.
+
+**Timestamps in the log.** Progress lines carried only elapsed seconds. `serve/server.py` now has `_stamp()`
+(`2026-10-29T16:22:10+08:00`: local date, time and UTC offset, DST-aware, no new imports) and `_say()`, which
+prints and also mirrors into the engine log — the launcher pipes this process's stdout for the console alone,
+so these lines never reached the log before. The `engine started:` line uses the same format.
+
+```
+[strata] 2026-10-29T16:22:09+08:00 reading the prompt: 62 of 67 tokens, 1 s so far
+[strata] 2026-10-29T16:22:10+08:00 thinking: 71 of max 200 tokens, 76.1 tok/s, 2 s
+```
+
+Verified: 3 stamped progress lines, **0 unstamped**. The tests
+`ThinkingBudget.test_a_progress_line_carries_the_local_date_time_and_utc_offset` and
+`ThinkingBudget.test_the_done_line_carries_the_local_date_time_and_utc_offset` each fail without the stamp and
+pass with it.
+
+**A second gap, found in the first live run (2026-10-29 17:21):** the `[strata] done:` summary — the line a long
+run is actually followed by — was still bare, because the first pass covered only `_progress`, a different call
+site. `done:` and "the reply reached max tokens while still thinking" now also go through `_say()` + `_stamp()`,
+so they reach the engine log as well. About 120 further `[strata]` prints stay bare deliberately: startup
+notices (`engine priority`, `layer split`, `loading the model`) and error paths are not the lines a run is
+followed by. Ask if those should be stamped too.
+
+**Recalibration after the revert** (2026-10-29, ~10 min, 27.96 GiB free, server stopped). The 2026-10-28 sweeps
+all ran with `--conversation-cache-mib 8192` and 10 GiB headroom, so they measured a ~14 GiB-resident machine.
+Re-run at 18.97 GiB, `START-HERE.bat --calibrate --no-start --yes` returned:
+
+| Flag            | 2026-10-28 | 2026-10-29 | Verdict                                           |
+| --------------- | ---------: | ---------: | ------------------------------------------------- |
+| `--pcie-frac`   |       0.00 |   **0.00** | unchanged                                         |
+| `--adapt-every` |          1 |          1 | unchanged                                         |
+| `--adapt-swaps` |        160 |    **160** | unchanged — the guess that it had moved was wrong |
+| `--adapt-decay` |       0.97 |       0.97 | unchanged                                         |
+| `--spec-min-p`  |       0.70 |   **0.50** | sweep chose 0.50 today; pinned to 0.70 by hand    |
+
+**`--spec-min-p` must be pinned by hand because the calibrator cannot resolve it.** The flag is not skipped:
+`SPEC_MIN_PS = (0.3, 0.5, 0.7)` (`tools/calibrate.py:51`) is swept at the PCIe share just chosen (`:335`). Two
+things make the answer unstable. First, `:310` (`apply(base_args, {})`) resets all seven calibrated flags to
+product defaults before measuring, so a tuned value never survives as the starting point. Second, `pick()`
+(`:186-192`) keeps a winner only when it beats the default pair by more than `MIN_GAIN = 3%` (`:49`), and
+`:360-362` then writes `--pcie-frac` and `--spec-min-p` **together**. The 0.50↔0.70 gap sits exactly on that 3%
+line: 2026-10-26 measured 0.70 = 125.2 against 0.50 = 121.5, only **+3.05%**; on 2026-10-29 at the same
+`--pcie-frac 0.00` the sweep chose 0.50 instead. Same share, opposite answer — the difference is the size of the
+noise. So 0.70 is pinned for **determinism, not because it is proven faster**. Deciding it would take an
+interleaved A/B (0.50, 0.70, 0.50, 0.70, …), which a single sequential sweep cannot do.
+
+**The recalibration did not touch the revert:** `--conversation-cache-mib 0`, `STRATA_RESIDENT_HEADROOM_GIB=6`
+and the other 14 `env` entries survived (43 args / 15 env before and after, nothing added or removed,
+`user_args` still `--vram-reserve-mib 1600`). `apply_env` manages only `STRATA_SH_STREAM`
+(`calibrate.py:514`), so the revert is safe across a calibration — verified by diff, not assumed.
+
+**Interleaved A/B, 2026-10-29** (harness kept outside the repo; 6 engine boots, one warm-up plus 3 × 600-token
+generations per boot, every arm at `--pcie-frac 0.00` and `--conversation-cache-mib 0`).
+
+| Arm                                 | Medians per boot |   Overall | Resident        | `does not fit` |
+| ----------------------------------- | ---------------: | --------: | --------------- | -------------- |
+| `--spec-min-p 0.70`, 6 GiB headroom |     221.6, 230.1 |     225.8 | 19.14–19.15 GiB | yes            |
+| `--spec-min-p 0.70`, 5 GiB headroom |     205.8, 253.5 | **229.7** | 20.25–20.45 GiB | **no**         |
+| `--spec-min-p 0.50`, 5 GiB headroom |     248.5, 224.7 | **236.6** | 20.25–20.45 GiB | no             |
+
+**5 GiB headroom is not faster: +1.7%, inside the noise** (individual 600-token rates span 146.9–275.0, about
+±30%). What it does buy is measurable elsewhere: **+1.1–1.3 GiB of resident experts and the `does not fit`
+warning disappears**. Its cost is 1 GiB less of the only out-of-memory cushion this machine has. **Decision:
+5 GiB**, for the larger resident pool and the clean log, with the decode gain explicitly disclaimed.
+
+**`--spec-min-p` stays unresolved.** 0.50 measured 236.6 against 229.7 for 0.70 (+3.0%), but the two rounds
+disagree in direction (round 1 favours 0.50, round 2 favours 0.70) and the spread inside a single arm is wider
+than the gap. **Decision: keep 0.70.** Do not re-litigate without many more samples.
+
+**Correction to the decode figures above.** The `128.9 / 158.6 / 152.9` rates were taken through ad-hoc HTTP
+calls _after_ a 23,870-token prefill had filled the page cache. With a matched harness the same 6 GiB
+configuration measures **225.8**, so that figure was a measurement-condition artifact, not a headroom penalty.
+**226 is also not a real agent decode rate**: this harness reads a ~20-token prompt and decodes 600 highly
+predictable tokens, so it overstates the 122.4 tok/s a real 40–200K-token agent turn produces. The harness is
+valid **only** for comparing arms against each other, which is how it was used here.
+
+**Agent-shaped A/B at ~58K context, 2026-10-29** (3 interleaved rounds, a 57,875-token prompt and a 300-token
+answer, 6 engine boots; decode taken from the engine's own stamped `answering:` lines rather than from
+wall-clock, which removes HTTP and serialisation overhead).
+
+| Arm   |   R1 |   R2 |   R3 |  Overall | Resident        | `does not fit`  |
+| ----- | ---: | ---: | ---: | -------: | --------------- | --------------- |
+| 5 GiB | 64.8 | 62.8 | 58.6 | **62.8** | 20.31–20.73 GiB | never           |
+| 6 GiB | 62.8 | 62.6 | 66.6 | **62.8** | 19.20–19.73 GiB | once (at 19.20) |
+
+**Identical at 58K context: 62.8 against 62.8.** Prefill tied as well (57,870 tokens in 32 s against 33 s, about
+1,808 against 1,754 tok/s). Together with the short-prompt result (+1.7%), **5 GiB headroom has no measurable
+throughput benefit at either context length.** It is kept only for the larger resident pool and the clean log,
+with the cost stated plainly: 1 GiB less out-of-memory cushion. If the desktop ever feels starved, set it back
+to 6 — that costs nothing measurable either.
+
+**The real agent numbers, for the record:** about **63 tok/s decode and 1,800 tok/s prefill at a 58K prompt**.
+That context penalty (~3.5× against the 226 a 20-token prompt yields) is exactly why the short-prompt harness
+must never be quoted as a real decode rate.
+
+### 2026-10-28 — engine `0.1.50` → `0.1.52`; conversation parking enabled for 2 sessions (superseded 2026-10-29)
+
+**Why the jump:** 0.1.52 is the newest **Qwen** package (release commit `a42cc3d7`: "every Qwen and DeepSeek
+package"). It matters for this machine: the five conversation-cache fixes are dated 2026-10-26 and the 0.1.50
+build commit (`1aff6d14117b`) is dated 2026-10-24, so 0.1.50 predates all of them — including `f8ff3420`
+(#1503), a **correctness** bug where one conversation could be parked with another's retained K/V.
+
+**Problem being solved:** two Pi sessions alternating re-read their whole history on every turn. Root cause is
+structural, not a setting: `include/strata/program/conv_cache.hpp:6-10` — the KV cache is _one arena that
+holds one branch of history at a time_, and retained checkpoints form a **chain**, not a tree. So
+`--prompt-cache 6` is six checkpoints on one branch; a second conversation invalidates the first. The boot log
+of 2026-10-28 shows it plainly: `190978`, `68882`, `193940`, `69137`, `195506` tokens all with
+`reused 0`, at ~100 s per re-read.
+
+**Why parking never worked before:** it was on by default the whole time and refused every attempt — the
+auto budget (`auto_conversation_cache_mib`, 40% of RAM above the floor, `conversation_memory.hpp:70-78`)
+collapsed to **1024 MiB** while real snapshots needed **1033–3338 MiB**, and `MemAvailable` was 200–400 MiB
+because 19.5 GiB of resident experts own the RAM.
+
+**How it was installed:** the manual §7 procedure. `strata.py update --no-control` fetched and test-started
+0.1.52 (loaded the model, answered one token) into the component store; it was copied over `engine/` and
+`BUILD.json` `"source": "f-027-rel"` rewritten to `"prebuilt"`. `strata.exe` 206,539,776 → 272,727,040
+bytes. `STRATA_PARK_ASYNC` and `STRATA_PARK_VRAM_MIB` are present in the 0.1.52 binary and absent in 0.1.50.
+
+**Config changes (all four landed, `args` 41 → 47, `env` 15 → 16):**
+
+| Change                              | From        | To      | Why                                                       |
+| ----------------------------------- | ----------- | ------- | --------------------------------------------------------- |
+| `STRATA_RESIDENT_HEADROOM_GIB`      | `6`         | `10`    | free host RAM for parking; resident 19.54 → **14.33 GiB** |
+| `STRATA_PARK_ASYNC`                 | —           | `1`     | 0.1.52 only: park in the background                       |
+| `--conversation-cache-mib`          | auto 1024   | `8192`  | fits two ~3.3 GiB snapshots                               |
+| `--conversation-cache-slots`        | 4           | `2`     | `1` is wrong: B's park would evict A                      |
+| `--conversation-cache-min-free-mib` | 2560 → 1024 | **512** | see below — this is what made it work                     |
+
+**The floor was the real blocker.** At `1024` the admission check still refused the 10K conversation:
+`need 351 MiB plus 1024 MiB floor, 1090 MiB available`, and A's return re-read in **4.39 s**. At `512`
+the same conversation parked (368 MB snapshot) and restored in **39.4 ms**. Exact log evidence:
+
+```
+conversation cache: parked 10662 tokens in 120.3 ms; snapshot_bytes=368278792
+conversation cache: restored 10558 tokens (checkpoint) in 39.4 ms
+prompt 10575 tokens = 10558 reused + 17 read in 211 ms (80.5 tok/s)
+```
+
+Single-session cold reads for scale: `prompt 10563 tokens = 0 reused + 10563 read in 11671 ms`.
+A returning session now re-reads **17 tokens instead of 10,563**.
+
+**Re-tune (calibration, 27.6 GiB free, idle machine).** The old values were fitted at 19.54 GiB resident on
+0.1.50 and were stale. The new optimum **flipped**:
+
+| Sweep         | Result                                                                                                        |
+| ------------- | ------------------------------------------------------------------------------------------------------------- |
+| PCIe share    | **0.00 = 120.1** (best), 1.00 = 119.9, 0.9 = 119.3, 0.35 = 118.7, 0.2 = 112.7, **0.75 = 111.0**, 0.55 = 109.7 |
+| Draft floor   | **0.7 = 125.2** (best), 0.5 = 115.4, 0.3 = 112.0                                                              |
+| CPU workers   | **7 = 124.4** (best), 5 = 114.2, 4 = 102.1, 2 = 83.7 → keep the engine default                                |
+| Adaptive tier | default = 84.7, 80 swaps = 95.3, **160 swaps = 98.3** → keep 160                                              |
+
+`--pcie-frac` 0.75 → **0.00** is the headline: with 5.2 GiB fewer resident experts the missed-expert split
+moves to the CPU. `--spec-min-p 0.70` was confirmed unchanged. `carry_user_args` preserved every parking
+setting through the rewrite (`args` 47, `env` 16 unchanged) — calibration is safe to re-run now.
+
+**Decode after the change:** warm 103–122 tok/s at `--pcie-frac 0.00` on short prompts, and 120–168 tok/s on
+the expert cache in general — at or above the 122 tok/s baseline. A direct 0.75-vs-0.00 probe disagreed with
+the sweep at n=3; the 9-prompt, 3-round sweep is the authoritative method, so 0.00 stands.
+
+**Known limits.** Parking is RAM-marginal on 32 GB: two ~10K conversations fit comfortably, but the two
+sessions still run **one at a time** (parking preserves history, it does not decode concurrently). A 190K
+conversation needs ~3.3 GiB per snapshot and will still be refused at headroom 10 — 64 GB of RAM remains the
+fix for that. Snapshots are not kept across restarts (`DETAILS.md:639`), so every boot starts cold.
+
 ### 2026-10-26 — engine `0.1.48` → `0.1.50` (source `0.1.51`)
 
 **Why the jump:** `git pull` brought source to 0.1.51. The newest published **Qwen** engine package was
