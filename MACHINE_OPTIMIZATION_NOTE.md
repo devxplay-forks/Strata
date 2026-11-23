@@ -7,7 +7,7 @@
 > - **RAM:** 32 GB DDR4
 > - **OS:** Windows 11 (CUDA 13 environment)
 > - **Target Models (Dual-Model Uncensored Setup):**
->   1. **Model 1 (`SC117 IQ2_XS`, Chinese + deep knowledge):** `SC117/Qwen3.8-Flash-Next-GSQ-RCO-abliterated-GGUF` (`IQ2_XS`, `68.47 GB`) on `0.1.59\strata.exe` (`strata-sc117-iq2_xs.json` + `run-sc117-iq2_xs.bat`, `0.0.0.0:8081` for Tailscale)
+>   1. **Model 1 (`SC117 IQ2_XS`, Chinese + deep knowledge):** `SC117/Qwen3.8-Flash-Next-GSQ-RCO-abliterated-GGUF` (`IQ2_XS`, `68.47 GB`) on `0.1.65\strata.exe` (`strata-sc117-iq2_xs.json` + `run-sc117-iq2_xs.bat`, `0.0.0.0:8081` for Tailscale; `0.2.20` codebase unchanged)
 >   2. **Model 2 (`Inkling 2 Mini Unbound v2`, English + long context):** `nokeepai/Inkling-2-Mini-Unbound-GGUF` (`v2-Q4_K_M.gguf`, `17.78 GB` + `Inkling-2-Mini-Vision.strata` `0.64 GB`) on `component:strata-inkling` `0.1.66` (`strata-inkling-unbound.json` + `run-inkling-unbound.bat`, `0.0.0.0:8081` for Tailscale)
 > - **Canonical Paths:** Always use `D:\workspace\github\devxplay-forks\Strata\` and `D:\workspace\github\devxplay-forks\Strata-data\` in configs and launch scripts. `C:\Users\payne\github\` is only a symlink/junction to `D:\workspace\github\` — keep `D:\` paths unchanged even when a shell opens under `C:\`.
 > - **Active Layout (`0.2.16+`):** Heavy assets (`models\`, `packs\`, `mtp\rt\`, `expert-profile-learned.bin`) live outside git in `D:\workspace\github\devxplay-forks\Strata-data\`; Python/server code lives under `terminal\`; C++ source lives under `engine\`.
@@ -49,11 +49,11 @@ When re-installing from scratch, switching branches, or rebuilding on this machi
 ### Step 2: Tuned Config Invariants (Two Independent Configs in CWD)
 
 1. **`strata-sc117-iq2_xs.json` (Model 1 — Qwen):**
-   - `"exe"` pinned to `C:\Users\payne\AppData\Local\Strata\components\engine\0.1.59-windows-x86_64-cuda-cuda13\strata.exe` (`0.1.66` has `#6704` / prompt-2 stability issues on `SC117`'s `Q8_0` matrices; revisit on `0.1.67+`)
+   - `"exe"` pinned to `C:\Users\payne\AppData\Local\Strata\components\engine\0.1.65-windows-x86_64-cuda-cuda13\strata.exe` (`v0.2.19` release binary running under the unchanged `0.2.20` codebase; `0.1.66` hits a non-env-gated multi-prompt `0xC0000005` crash on `SC117`, revisit on `0.1.67+`)
    - `"expert_profile_save": "D:\\workspace\\github\\devxplay-forks\\Strata-data\\expert-profile-learned.bin"`, `"expert_profile_save_every": 10`
-   - `"vision.exe"` -> `0.1.66-windows-x86_64-cuda-cuda13\strata-vision.exe` (`"gpu": false`, CPU reader)
+   - `"vision.exe"` -> `0.1.65-windows-x86_64-cuda-cuda13\strata-vision.exe` (`"gpu": false`, CPU reader)
    - Opt-in `"env"`: `STRATA_RESIDENT_HEADROOM_GIB=6`, `STRATA_PF_FUSED=1`, `STRATA_SPEC_COUPLED=1`, `STRATA_SPEC_GUMBEL=1`, `STRATA_PIN_BY_NEED=1`, `STRATA_PCIE_MIN1=1`, `STRATA_RAM_ADAPT=2`, `STRATA_RAM_ADAPT2=1`, `STRATA_DEQUANT_WIDE=1`, `STRATA_PROMPT_ATTN_IMMA=1`, `STRATA_ATTN_DAILY=1`, `STRATA_GU_SWIGLU=1`, `STRATA_GR_UP75=1`, `STRATA_QSA_ROWS=1`, `STRATA_SIDE_MIXER=2`
-   - `"args"`: `--max-context 262144`, `--kv k8v4`, `--conversation-cache-mib 0`, `--pcie-frac 0.35`, `--spec-min-p 0.70`, `--mtp-window 8192`, `--adapt-async 1`, `--host-core sibling`, `--prompt-cache-spread`
+   - `"args"`: `--max-context 262144`, `--kv k8v4`, `--conversation-cache-mib 0`, `--pcie-frac 0.35`, `--spec-min-p 0.70`, `--adapt-every 1`, `--adapt-swaps 80`, `--adapt-decay 0.97`, `--mtp-window 8192`, `--adapt-async 1`, `--host-core sibling`, `--prompt-cache-spread`
    - `"host": "0.0.0.0"`, `"port": 8081`, `"api_key": "sk-strata-local"` (Tailscale access; pass a short neutral-script system prompt in client requests per `arXiv:2610.29342v2`)
 2. **`strata-inkling-unbound.json` (Model 2 — Inkling 2 Mini):**
    - `"exe": "component:strata-inkling"`, `"arch": "inkling2_loop"` (`shapes\inkling2\engine\0.1.66-windows-x86_64-cuda-cuda13\strata-inkling.exe`)
@@ -295,12 +295,12 @@ Append-only record. Newest first. Keep the procedure in §7 clean — evidence l
 
 **Model 1 (`SC117/Qwen3.8-Flash-Next-GSQ-RCO-abliterated-GGUF` `IQ2_XS`):**
 - Downloaded `68.47 GB` (`39.67 + 28.80`) + `mmproj-Qwen3.8-Flash-Next-BF16.gguf` (`0.91 GB`), packed via `iq_pack.py` (`packs\sc117-iq2_xs`, `1.43 GiB` arena; `--native` = shard 1, `--ple-gguf` = shard 2).
-- **0.1.66 regression check:** `0.1.66` (`strata.exe`) hit `Niko1221/Strata#6704` (`__ldg()` on `__shared__` Q8_0 kernels) and exited mid-sweep on `SC117` (`r1 p1`), whereas `0.1.59\strata.exe` completed `CAL.run(...)` (`1193 s`, `0` errors) and passed live HTTP + CPU Vision + uncensored Traditional-Chinese script verification. Pinned `strata-sc117-iq2_xs.json` to `0.1.59\strata.exe` until `0.1.67` ships PR `#6714`.
-- **Calibration (`0.1.59`, `28.17 GiB` free RAM, `9,535` slots / `12.79 GiB` VRAM):**
-  - `--pcie-frac`: `0.35 = 71.8` (`0.55 = 71.8`, `0.75 = 70.7`, `0.9 = 70.4`, `1.0 = 68.8`, `0.0 = 67.1`, `0.2 = 67.0`) -> **`0.35`**
-  - `--spec-min-p`: **`0.70 = 77.8`** (`0.50 = 72.2`, `0.30 = 60.2`; confirm `0.35/0.70` median `73.2` vs `0.35/0.50` `66.2`, `+10.6%`) -> **`0.70`**
-  - `--pool-workers`: **`7` (default) = 76.6**, `5 = 66.5`, `4 = 62.3`, `2 = 43.6`
-  - Adaptive tier: default `65.6`, `1/80/0.97 = 64.6`, `1/160/0.97 = 65.7` (<3% `MIN_GAIN`, keep default)
+- **0.1.66 vs `0.1.65` vs `0.1.59` check:** `0.1.66` (`strata.exe`) crashed (`0xC0000005`) on `SC117` (`r1 p1` / mid-sweep) even with `STRATA_SM89_PERF=0` and `STRATA_HC_Q8=0` (`SC117` stores its `290` `hc_*` weights as `BF16` `ggml_type 30`, not `Q8_0`, so this crash is distinct from `Niko1221/Strata#6704`). `0.1.59\strata.exe` completed `CAL.run` (`1193 s`, `65.6–78.2 tok/s`), and installing `0.1.65` (`v0.2.19` binary SHA-256 `2d189197...`, keeping the `0.2.20` codebase unchanged) completed `CAL.run` cleanly in `981 s` (`0` errors) at **`102.5–120.4 tok/s`** (`+56%` faster than `0.1.59`). Pinned `strata-sc117-iq2_xs.json` to `0.1.65\strata.exe` until `0.1.67+` is verified.
+- **Calibration (`0.1.65`, `28.63 GiB` free RAM, `9,516` slots / `12.76 GiB` VRAM):**
+  - `--pcie-frac`: **`0.35 = 115.2`** (`0.2 = 113.8`, `0.9 = 112.5`, `0.0 = 111.9`, `0.75 = 111.9`, `0.55 = 109.6`, `1.0 = 107.5`) -> **`0.35`**
+  - `--spec-min-p`: **`0.70 = 114.6`** (`0.50 = 106.8`, `0.30 = 103.3`; confirm `0.35/0.70` median **`117.7`** vs `0.0/0.50` `109.8`, `+7.2%`) -> **`0.70`**
+  - `--pool-workers`: **`7` (default) = 117.2**, `5 = 113.1`, `4 = 101.8`, `2 = 80.4`
+  - Adaptive tier: default `97.3`, **`1/80/0.97 = 102.5`** (`+5.3%`), `1/160/0.97 = 102.0` -> **`--adapt-every 1 --adapt-swaps 80 --adapt-decay 0.97`**
 
 **Model 2 (`nokeepai/Inkling-2-Mini-Unbound-GGUF` `v2-Q4_K_M.gguf` on `strata-inkling 0.1.66`):**
 - Installed `strata-inkling 0.1.66` (`windows-x86_64-cuda-cuda13`, `417 MB`) into `%LOCALAPPDATA%\Strata\components\shapes\inkling2\`.

@@ -79,12 +79,12 @@ Runtime engine binaries live in `%LOCALAPPDATA%\Strata\components\`:
 
 | Parameter | Model 1: `SC117 IQ2_XS` | Model 2: `Inkling 2 Mini Unbound v2` |
 | --- | --- | --- |
-| `exe` / `arch` | `0.1.59\strata.exe` (pinned for `#6704` stability) | `"component:strata-inkling"` (`0.1.66`) / `"inkling2_loop"` |
+| `exe` / `arch` | `0.1.65\strata.exe` (`v0.2.19` binary under `0.2.20` codebase; `0.1.66` hits non-`#6704` `0xC0000005` on `SC117`) | `"component:strata-inkling"` (`0.1.66`) / `"inkling2_loop"` |
 | Context (`--max-context`) | `262144` (`256K`) | `1048576` (`1M` requested, auto-clamped by `ink_runner.cuh` to `~571,520` on `32 GB` RAM) |
 | KV Cache (`--kv`) | `k8v4` | `k8v4` (`12.75 KiB/tok` global via `--kv-offload auto`) |
-| Vision | CPU `0.1.66\strata-vision.exe` + `mmproj-Qwen3.8-Flash-Next-BF16.gguf` (`0.91 GB`) | In-process `--vision` pointing to `Inkling-2-Mini-Vision.strata` (`0.64 GB` lossless BF16) |
-| Speculative Draft | `--spec 4 --mtp ...\mtp\rt` (`--spec-min-p 0.70`, `--pcie-frac 0.35`) | `"drafting": "off"` (external `dspark` lacks `dspark.` tensor prefix in `0.1.66`) |
-| Measured Speed (RTX 4090) | `65.6–78.2 tok/s` multi-prompt median (`CAL.run`), `117–182 tok/s` code warm | **`98.9 tok/s`** decode, `534.0 ppts` prefill (`--bench`) |
+| Vision | CPU `0.1.65\strata-vision.exe` + `mmproj-Qwen3.8-Flash-Next-BF16.gguf` (`0.91 GB`) | In-process `--vision` pointing to `Inkling-2-Mini-Vision.strata` (`0.64 GB` lossless BF16) |
+| Speculative Draft | `--spec 4 --mtp ...\mtp\rt` (`--spec-min-p 0.70`, `--pcie-frac 0.35`, `--adapt-every 1 --adapt-swaps 80 --adapt-decay 0.97`) | `"drafting": "off"` (external `dspark` lacks `dspark.` tensor prefix in `0.1.66`) |
+| Measured Speed (RTX 4090) | **`102.5–117.7 tok/s`** (`0.1.65` `CAL.run`, `981 s`) | **`98.9 tok/s`** decode, `534.0 ppts` prefill (`--bench`) |
 
 ### 3.3 Critical Invariants & Risks
 
