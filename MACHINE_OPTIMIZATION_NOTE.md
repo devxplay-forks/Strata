@@ -6,9 +6,11 @@
 > - **CPU:** AMD Ryzen 7 3700X (8 Cores, 16 Threads, Zen 2, AVX2)
 > - **RAM:** 32 GB DDR4
 > - **OS:** Windows 11 (CUDA 13 environment)
-> - **Target Model:** `swift` (Swift 1.5) / `IQ2_XS` (2-bit i-quant)
+> - **Target Models (Dual-Model Uncensored Setup):**
+>   1. **Model 1 (`SC117 IQ2_XS`, Chinese + deep knowledge):** `SC117/Qwen3.8-Flash-Next-GSQ-RCO-abliterated-GGUF` (`IQ2_XS`, `68.47 GB`) on `0.1.59\strata.exe` (`strata-sc117-iq2_xs.json` + `run-sc117-iq2_xs.bat`, `0.0.0.0:8081` for Tailscale)
+>   2. **Model 2 (`Inkling 2 Mini Unbound v2`, English + long context):** `nokeepai/Inkling-2-Mini-Unbound-GGUF` (`v2-Q4_K_M.gguf`, `17.78 GB` + `Inkling-2-Mini-Vision.strata` `0.64 GB`) on `component:strata-inkling` `0.1.66` (`strata-inkling-unbound.json` + `run-inkling-unbound.bat`, `0.0.0.0:8081` for Tailscale)
 > - **Canonical Paths:** Always use `D:\workspace\github\devxplay-forks\Strata\` and `D:\workspace\github\devxplay-forks\Strata-data\` in configs and launch scripts. `C:\Users\payne\github\` is only a symlink/junction to `D:\workspace\github\` — keep `D:\` paths unchanged even when a shell opens under `C:\`.
-> - **Active Layout (`0.2.16+`):** `strata-swift-iq2_xs.json` uses `"exe": "component:strata-engine"` (resolves `%LOCALAPPDATA%\Strata\components\engine\<active>\strata.exe`), Python/server code lives under `terminal/`, C++ source lives under `engine/`, and `expert_profile_save` writes outside git to `D:\workspace\github\devxplay-forks\Strata-data\expert-profile-learned.bin`.
+> - **Active Layout (`0.2.16+`):** Heavy assets (`models\`, `packs\`, `mtp\rt\`, `expert-profile-learned.bin`) live outside git in `D:\workspace\github\devxplay-forks\Strata-data\`; Python/server code lives under `terminal\`; C++ source lives under `engine\`.
 ---
 
 ## 1. Quick Re-setup Commands
@@ -39,48 +41,49 @@ When re-installing from scratch, switching branches, or rebuilding on this machi
 
 ---
 
-### Step 1: Initial Setup (Fresh Machine Only)
+### Step 1: Model Assets & Packs (`D:\workspace\github\devxplay-forks\Strata-data\`)
 
-```powershell
-.\START-HERE.bat --family swift --model IQ2_XS --context 262144 --kv k8v4 --vision cpu --draft-vocab en --vram-reserve-mib 1600 --port 8081 --yes --no-start
-```
+1. **Model 1 (`SC117 IQ2_XS`):** Download `IQ2_XS` shards 1 & 2 (`68.47 GB`) + `mmproj-Qwen3.8-Flash-Next-BF16.gguf` (`0.91 GB`) to `Strata-data\models\sc117-IQ2_XS\`, pack with `terminal\tools\iq_pack.py` into `Strata-data\packs\sc117-iq2_xs\`, and reuse `Strata-data\mtp\rt\`. *(Note: `SC117` puts `per_layer_token_embd` in shard 2, so `--native` = shard 1 and `--ple-gguf` = shard 2.)*
+2. **Model 2 (`Inkling 2 Mini Unbound v2`):** Download `Inkling-2-Mini-Unbound-v2-Q4_K_M.gguf` (`17.78 GB`) + `Inkling-2-Mini-Vision.strata` (`0.64 GB`) to `Strata-data\models\inkling-2-mini-unbound-gguf\`, and export `o200k` tokenizer to `Strata-data\packs\inkling-2-mini-unbound\tokenizer\`.
 
-_(In `0.2.16+`, `START-HERE.bat` writes configs under `terminal\`. This machine keeps its tuned root `strata-swift-iq2_xs.json` and `run-swift-iq2_xs.bat` as the live source of truth.)_
+### Step 2: Tuned Config Invariants (Two Independent Configs in CWD)
 
-### Step 2: Tuned Config (`strata-swift-iq2_xs.json` Invariants)
+1. **`strata-sc117-iq2_xs.json` (Model 1 — Qwen):**
+   - `"exe"` pinned to `C:\Users\payne\AppData\Local\Strata\components\engine\0.1.59-windows-x86_64-cuda-cuda13\strata.exe` (`0.1.66` has `#6704` / prompt-2 stability issues on `SC117`'s `Q8_0` matrices; revisit on `0.1.67+`)
+   - `"expert_profile_save": "D:\\workspace\\github\\devxplay-forks\\Strata-data\\expert-profile-learned.bin"`, `"expert_profile_save_every": 10`
+   - `"vision.exe"` -> `0.1.66-windows-x86_64-cuda-cuda13\strata-vision.exe` (`"gpu": false`, CPU reader)
+   - Opt-in `"env"`: `STRATA_RESIDENT_HEADROOM_GIB=6`, `STRATA_PF_FUSED=1`, `STRATA_SPEC_COUPLED=1`, `STRATA_SPEC_GUMBEL=1`, `STRATA_PIN_BY_NEED=1`, `STRATA_PCIE_MIN1=1`, `STRATA_RAM_ADAPT=2`, `STRATA_RAM_ADAPT2=1`, `STRATA_DEQUANT_WIDE=1`, `STRATA_PROMPT_ATTN_IMMA=1`, `STRATA_ATTN_DAILY=1`, `STRATA_GU_SWIGLU=1`, `STRATA_GR_UP75=1`, `STRATA_QSA_ROWS=1`, `STRATA_SIDE_MIXER=2`
+   - `"args"`: `--max-context 262144`, `--kv k8v4`, `--conversation-cache-mib 0`, `--pcie-frac 0.35`, `--spec-min-p 0.70`, `--mtp-window 8192`, `--adapt-async 1`, `--host-core sibling`, `--prompt-cache-spread`
+   - `"host": "0.0.0.0"`, `"port": 8081`, `"api_key": "sk-strata-local"` (Tailscale access; pass a short neutral-script system prompt in client requests per `arXiv:2610.29342v2`)
+2. **`strata-inkling-unbound.json` (Model 2 — Inkling 2 Mini):**
+   - `"exe": "component:strata-inkling"`, `"arch": "inkling2_loop"` (`shapes\inkling2\engine\0.1.66-windows-x86_64-cuda-cuda13\strata-inkling.exe`)
+   - `"args"`: `--native ...\Inkling-2-Mini-Unbound-v2-Q4_K_M.gguf`, `--vision ...\Inkling-2-Mini-Vision.strata`, `--max-context 1048576`, `--kv k8v4`, `--kv-offload auto` (auto-clamps cleanly to available RAM, e.g. `~571K` tokens on `32 GB` RAM while keeping `100%` experts in VRAM)
+   - **Do NOT add `--vram-experts-gb` or `--ram-experts-gb`** (`#6716`), and keep `"drafting": "off"` (external GGUF/safetensors DSpark lacks `dspark.` tensor prefix in `0.1.66`)
+   - `"host": "0.0.0.0"`, `"port": 8081`, `"api_key": "sk-strata-local"`
 
-Keep these machine-specific overrides in `strata-swift-iq2_xs.json` (do not duplicate defaults already baked into `0.1.66` unless intentionally overriding):
-
-1. **Top-level:**
-   - `"exe": "component:strata-engine"` (reads the active `%LOCALAPPDATA%\Strata\components\engine\` install)
-   - `"expert_profile_save": "D:\\workspace\\github\\devxplay-forks\\Strata-data\\expert-profile-learned.bin"` (outside git)
-   - `"expert_profile_save_every": 10`
-   - `"vision.exe"` pointed to the matching `%LOCALAPPDATA%\Strata\components\engine\<ver>-windows-x86_64-cuda-cuda13\strata-vision.exe`
-2. **Opt-in `"env"` overrides** (required beyond `0.1.66` `sm_89` defaults):
-   - `STRATA_RESIDENT_HEADROOM_GIB=6`, `STRATA_SPEC_COUPLED=1`, `STRATA_SPEC_GUMBEL=1`, `STRATA_PIN_BY_NEED=1`, `STRATA_PCIE_MIN1=1`, `STRATA_RAM_ADAPT=2`, `STRATA_RAM_ADAPT2=1`, `STRATA_DEQUANT_WIDE=1`
-   - _(Note: `STRATA_PF_FUSED`, `STRATA_PROMPT_ATTN_IMMA`, `STRATA_ATTN_DAILY`, `STRATA_GU_SWIGLU`, `STRATA_GR_UP75`, `STRATA_QSA_ROWS`, and `STRATA_SIDE_MIXER=2` are now automatic `sm_89` defaults in `0.1.66` via `engine/src/core/nv_defaults.cpp:75–103`.)_
-3. **Tuned `"args"`:** `--expert-profile D:\workspace\github\devxplay-forks\Strata\terminal\data\expert-profile.bin`, `--mtp-window 8192`, `--adapt-async 1`, `--host-core sibling`, `--prompt-cache-spread`, plus the calibrated flags (`--pcie-frac`, `--spec-min-p`, `--adapt-every`, `--adapt-swaps`, `--adapt-decay`).
-
-### Step 3: Hardware Calibration
+### Step 3: Hardware Calibration (Qwen Only)
 
 > **Precondition:** Require **`>= 25.8 GiB` free RAM** on this PC (`19.54 + 6.25`) with no other heavy apps running. Lower free RAM reduces the resident complement and can pick the wrong `--pcie-frac` (§8).
 
-`START-HERE.bat --calibrate` scans `terminal\strata-*.json` only, and `terminal/tools/calibrate.py:252` passes `cfg["exe"]` verbatim to `StrataEngine` (without expanding `"component:strata-engine"`). Run calibration directly against root `strata-swift-iq2_xs.json` by resolving `"component:strata-engine"` in memory and resetting prior tuned flags via `CAL.apply(args, {})`:
+`calibrate.py` applies only to Qwen (`strata-sc117-iq2_xs.json`); `strata-inkling` has no Flash-Next `--pcie-frac` / `--spec-min-p` / `--adapt-*` knobs (`serve/server.py:8784`):
 
 ```powershell
-$exe = Join-Path $env:LOCALAPPDATA "Strata\components\engine\0.1.66-windows-x86_64-cuda-cuda13\strata.exe"
-python -c "import copy, json, pathlib, sys; sys.path[:0] = [str(pathlib.Path('terminal').resolve()), str(pathlib.Path('terminal/tools').resolve())]; import calibrate as CAL; cfg = copy.deepcopy(json.loads(pathlib.Path('strata-swift-iq2_xs.json').read_text('utf-8-sig'))); cfg['exe'] = r'$exe'; cfg['args'] = CAL.apply(cfg['args'], {}); print(json.dumps(CAL.run(cfg), indent=1))"
+python -c "import copy, json, pathlib, sys; sys.path[:0] = [str(pathlib.Path('terminal').resolve()), str(pathlib.Path('terminal/tools').resolve())]; import calibrate as CAL; cfg = copy.deepcopy(json.loads(pathlib.Path('strata-sc117-iq2_xs.json').read_text('utf-8-sig'))); cfg['args'] = CAL.apply(cfg['args'], {}); print(json.dumps(CAL.run(cfg), indent=1))"
 ```
 
-_(Takes ~10 min across PCIe share, draft floor, CPU workers, and adaptive tier; applies per-request `strata_tune` keys, keeping only settings that beat the baseline by `> 3%` `MIN_GAIN`. Write any winning `settings` back into `strata-swift-iq2_xs.json` while keeping `"exe": "component:strata-engine"`.)_
+_(Takes ~15–20 min across PCIe share, draft floor, CPU workers, and adaptive tier; write any winning `settings` back into `strata-sc117-iq2_xs.json`.)_
 
-### Step 4: Run Server
+### Step 4: Run Either Server (Port `8081`, One Active at a Time)
 
 ```powershell
-.\run-swift-iq2_xs.bat
+# Model 1: Uncensored Qwen 3.8 (Chinese scripts, deep knowledge, 262K ctx)
+.\run-sc117-iq2_xs.bat
+
+# Model 2: Inkling 2 Mini Unbound v2 (English scripts, ~571K–1M ctx, zero CCP alignment)
+.\run-inkling-unbound.bat
 ```
 
-_(Launches `D:\workspace\github\devxplay-forks\Strata\terminal\serve\server.py` with `strata-swift-iq2_xs.json` on `0.0.0.0:8081`.)_
+_(Both launch `D:\workspace\github\devxplay-forks\Strata\terminal\serve\server.py` on `0.0.0.0:8081`. Stop the active server with `Ctrl+C` before starting the other.)_
 
 ---
 
@@ -88,21 +91,26 @@ _(Launches `D:\workspace\github\devxplay-forks\Strata\terminal\serve\server.py` 
 
 ### Daily Startup Command
 
-Run the server directly (no re-setup or re-calibration needed across reboots):
+Run whichever model you need on `0.0.0.0:8081` (no re-setup or re-calibration needed across reboots; one active at a time):
 
 ```powershell
-.\run-swift-iq2_xs.bat
+.\run-sc117-iq2_xs.bat        # Uncensored Qwen 3.8 (Chinese + deep knowledge)
+.\run-inkling-unbound.bat     # Inkling 2 Mini Unbound v2 (English + long context)
 ```
 
 ### Golden Health Verification Checklist
 
-Confirm these lines in the console / `strata-swift-iq2_xs.log` after startup:
+**For `SC117 IQ2_XS` (`strata-sc117-iq2_xs.log`):**
+1. `resident RAM mode: 19.5x–21.3x GiB of experts in RAM (locked)` — confirms resident experts are locked in RAM (`>= 25.81 GiB` free at launch).
+2. `expert cache ~9,534 slots, ~12.79 GiB of VRAM` — confirms GPU VRAM expert cache is populated.
+3. `the host thread on 1 (draining too) (--host-core sibling)` — confirms host scheduler is pinned to Core 0 Thread 1.
+4. `--expert-profile D:\workspace\github\devxplay-forks\Strata-data\expert-profile-learned.bin` — confirms learned routing profile loaded.
+5. `http://127.0.0.1:8081/health` returns `"images": true, "loaded": true`.
 
-1. `resident RAM mode: 19.5x–20.5x GiB of experts in RAM (locked)` — confirms resident experts are locked in RAM with 0 SSD file stalls (`available RAM − 6.25 GiB`, capped at `19.54 GiB`; requires `>= 25.81 GiB` free at launch, otherwise close memory-heavy apps and restart before judging speed).
-2. `expert cache ~9,595–10,068 slots, ~12.88–13.48 GiB of VRAM` — confirms GPU VRAM expert cache is populated (exact count shifts slightly across engine versions).
-3. `the host thread on 1 (draining too) (--host-core sibling)` — confirms host scheduler is pinned to Core 0 Thread 1, leaving Thread 0 free for Windows 11 GPU driver interrupts.
-4. `--expert-profile D:\workspace\github\devxplay-forks\Strata-data\expert-profile-learned.bin` — confirms your learned coding expert routing distribution loaded.
-5. `STRATA_ROUTE_TAIL_SKIP not set: off` — confirms exact routing (no tail-skipping) on `0.1.63+`, with ISO-8601 UTC-offset timestamps (`YYYY-MM-DDTHH:MM:SS+08:00`) on `progress`/`done` log lines.
+**For `Inkling 2 Mini Unbound v2` (`strata-inkling-unbound.log`):**
+1. `experts=3072 GPU0 + 0 GPU-1 / 0 host` — confirms `100%` of Inkling experts stay in RTX 4090 VRAM (`0` CPU/host spill).
+2. `Auto Host KV Offload (kv_fmt=3, ...): global KV = ... VRAM + ... mapped host tokens` — confirms `--kv k8v4` mapped host KV offload is active (`max_ctx` ~416K–571K+ depending on free RAM).
+3. `http://127.0.0.1:8081/health` returns `"family": "inkling2", "images": true, "loaded": true`.
 
 ### Config-Change Verification (Prompt Reuse / Conversation Cache)
 
@@ -280,6 +288,26 @@ Then point `vision.exe` in `strata-swift-iq2_xs.json` back to the previous folde
 ## 8. Version Log (What Each Upgrade Actually Did)
 
 Append-only record. Newest first. Keep the procedure in §7 clean — evidence lives here.
+
+### 2026-11-23 — Dual-Model Uncensored Migration (`SC117 IQ2_XS` + `Inkling 2 Mini Unbound v2`)
+
+**Goal & cleanup:** Replaced censored `Swift 1.5 IQ2_XS` (`~106 GB` removed) with two independent uncensored script-writing setups sharing `0.0.0.0:8081` (Tailscale) in CWD while keeping all weights/packs/caches in `D:\workspace\github\devxplay-forks\Strata-data\`.
+
+**Model 1 (`SC117/Qwen3.8-Flash-Next-GSQ-RCO-abliterated-GGUF` `IQ2_XS`):**
+- Downloaded `68.47 GB` (`39.67 + 28.80`) + `mmproj-Qwen3.8-Flash-Next-BF16.gguf` (`0.91 GB`), packed via `iq_pack.py` (`packs\sc117-iq2_xs`, `1.43 GiB` arena; `--native` = shard 1, `--ple-gguf` = shard 2).
+- **0.1.66 regression check:** `0.1.66` (`strata.exe`) hit `Niko1221/Strata#6704` (`__ldg()` on `__shared__` Q8_0 kernels) and exited mid-sweep on `SC117` (`r1 p1`), whereas `0.1.59\strata.exe` completed `CAL.run(...)` (`1193 s`, `0` errors) and passed live HTTP + CPU Vision + uncensored Traditional-Chinese script verification. Pinned `strata-sc117-iq2_xs.json` to `0.1.59\strata.exe` until `0.1.67` ships PR `#6714`.
+- **Calibration (`0.1.59`, `28.17 GiB` free RAM, `9,535` slots / `12.79 GiB` VRAM):**
+  - `--pcie-frac`: `0.35 = 71.8` (`0.55 = 71.8`, `0.75 = 70.7`, `0.9 = 70.4`, `1.0 = 68.8`, `0.0 = 67.1`, `0.2 = 67.0`) -> **`0.35`**
+  - `--spec-min-p`: **`0.70 = 77.8`** (`0.50 = 72.2`, `0.30 = 60.2`; confirm `0.35/0.70` median `73.2` vs `0.35/0.50` `66.2`, `+10.6%`) -> **`0.70`**
+  - `--pool-workers`: **`7` (default) = 76.6**, `5 = 66.5`, `4 = 62.3`, `2 = 43.6`
+  - Adaptive tier: default `65.6`, `1/80/0.97 = 64.6`, `1/160/0.97 = 65.7` (<3% `MIN_GAIN`, keep default)
+
+**Model 2 (`nokeepai/Inkling-2-Mini-Unbound-GGUF` `v2-Q4_K_M.gguf` on `strata-inkling 0.1.66`):**
+- Installed `strata-inkling 0.1.66` (`windows-x86_64-cuda-cuda13`, `417 MB`) into `%LOCALAPPDATA%\Strata\components\shapes\inkling2\`.
+- **Format & DSpark findings on `0.1.66` `sm_89`:** `HF-NVFP4-MXFP8` `safetensors` passed on `--cpu` but output gibberish (`token 123268`) on `sm_89` CUDA (`32K fp16` & `1M k8v4`); switching to `nokeepai/Inkling-2-Mini-Unbound-GGUF` (`Inkling-2-Mini-Unbound-v2-Q4_K_M.gguf` `17.78 GB` + `Inkling-2-Mini-Vision.strata` `0.64 GB` lossless BF16) fixed GPU inference cleanly. External `mtp.safetensors` / `dspark-Inkling-2-Mini-Q8_0.gguf` lacked `dspark.` tensor prefix in `0.1.66`, so `"drafting": "off"`.
+- **Bench & HTTP verification (`--max-context 1048576 --kv k8v4 --kv-offload auto --draft off`):**
+  - `strata-inkling --bench` (`512` prompt, `128` gen): **`98.9 tok/s` decode**, `534.0 ppts` prefill, **`3072/3072` experts in RTX 4090 VRAM (`0` host/SSD)**.
+  - Live HTTP (`0.0.0.0:8081`): `max_context=571520` auto-clamped to free RAM, `images=true`, clean uncensored 1989 Beijing film dialogue + accurate Vision (`"Solid blue color."`).
 
 ### 2026-11-23 — engine `0.1.52` → `0.1.66` (source `0.2.20`); re-calibrated on RTX 4090
 
