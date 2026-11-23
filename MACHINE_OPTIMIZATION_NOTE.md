@@ -1,13 +1,14 @@
 # Machine Profile & Performance Setup Guide
 
-> **Hardware Baseline** — the engine version currently in use, and every measurement behind these settings, are recorded in **§8 Version Log**.
+> **Hardware Baseline & Canonical Paths** — current engine/calibration readings live in **§8 Version Log**.
 >
-> - **GPU:** NVIDIA GeForce RTX 4090 (24 GB VRAM, PCIe Gen4 x16)
+> - **GPU:** NVIDIA GeForce RTX 4090 (24 GB VRAM, PCIe Gen4 x16, Ada `sm_89`)
 > - **CPU:** AMD Ryzen 7 3700X (8 Cores, 16 Threads, Zen 2, AVX2)
 > - **RAM:** 32 GB DDR4
 > - **OS:** Windows 11 (CUDA 13 environment)
 > - **Target Model:** `swift` (Swift 1.5) / `IQ2_XS` (2-bit i-quant)
-
+> - **Canonical Paths:** Always use `D:\workspace\github\devxplay-forks\Strata\` and `D:\workspace\github\devxplay-forks\Strata-data\` in configs and launch scripts. `C:\Users\payne\github\` is only a symlink/junction to `D:\workspace\github\` — keep `D:\` paths unchanged even when a shell opens under `C:\`.
+> - **Active Layout (`0.2.16+`):** `strata-swift-iq2_xs.json` uses `"exe": "component:strata-engine"` (resolves `%LOCALAPPDATA%\Strata\components\engine\<active>\strata.exe`), Python/server code lives under `terminal/`, C++ source lives under `engine/`, and `expert_profile_save` writes outside git to `D:\workspace\github\devxplay-forks\Strata-data\expert-profile-learned.bin`.
 ---
 
 ## 1. Quick Re-setup Commands
@@ -38,67 +39,48 @@ When re-installing from scratch, switching branches, or rebuilding on this machi
 
 ---
 
-### Step 1: Initial Setup
+### Step 1: Initial Setup (Fresh Machine Only)
 
 ```powershell
 .\START-HERE.bat --family swift --model IQ2_XS --context 262144 --kv k8v4 --vision cpu --draft-vocab en --vram-reserve-mib 1600 --port 8081 --yes --no-start
 ```
 
-### Step 2: Custom Optimizations (Manual JSON Edit)
+_(In `0.2.16+`, `START-HERE.bat` writes configs under `terminal\`. This machine keeps its tuned root `strata-swift-iq2_xs.json` and `run-swift-iq2_xs.bat` as the live source of truth.)_
 
-Open `strata-swift-iq2_xs.json` and ensure these entries are present:
+### Step 2: Tuned Config (`strata-swift-iq2_xs.json` Invariants)
 
-1. At top-level:
-   ```json
-   "expert_profile_save": "data/expert-profile-learned.bin",
-   "expert_profile_save_every": 10,
-   ```
-2. In `"env"`:
-   ```json
-   "env": {
-     "STRATA_PF_FUSED": "1",
-     "STRATA_RESIDENT_HEADROOM_GIB": "6",
-     "STRATA_SPEC_COUPLED": "1",
-     "STRATA_PIN_BY_NEED": "1",
-     "STRATA_PCIE_MIN1": "1",
-     "STRATA_SPEC_GUMBEL": "1",
-     "STRATA_RAM_ADAPT": "2",
-     "STRATA_RAM_ADAPT2": "1",
-     "STRATA_DEQUANT_WIDE": "1",
-     "STRATA_PROMPT_ATTN_IMMA": "1",
-     "STRATA_ATTN_DAILY": "1",
-     "STRATA_GU_SWIGLU": "1",
-     "STRATA_GR_UP75": "1",
-     "STRATA_QSA_ROWS": "1",
-     "STRATA_SIDE_MIXER": "2"
-   }
-   ```
-3. In `"args"` (append to list):
-   ```json
-   "--mtp-window",
-   "8192",
-   "--adapt-async",
-   "1",
-   "--host-core",
-   "sibling",
-   "--prompt-cache-spread"
-   ```
+Keep these machine-specific overrides in `strata-swift-iq2_xs.json` (do not duplicate defaults already baked into `0.1.66` unless intentionally overriding):
+
+1. **Top-level:**
+   - `"exe": "component:strata-engine"` (reads the active `%LOCALAPPDATA%\Strata\components\engine\` install)
+   - `"expert_profile_save": "D:\\workspace\\github\\devxplay-forks\\Strata-data\\expert-profile-learned.bin"` (outside git)
+   - `"expert_profile_save_every": 10`
+   - `"vision.exe"` pointed to the matching `%LOCALAPPDATA%\Strata\components\engine\<ver>-windows-x86_64-cuda-cuda13\strata-vision.exe`
+2. **Opt-in `"env"` overrides** (required beyond `0.1.66` `sm_89` defaults):
+   - `STRATA_RESIDENT_HEADROOM_GIB=6`, `STRATA_SPEC_COUPLED=1`, `STRATA_SPEC_GUMBEL=1`, `STRATA_PIN_BY_NEED=1`, `STRATA_PCIE_MIN1=1`, `STRATA_RAM_ADAPT=2`, `STRATA_RAM_ADAPT2=1`, `STRATA_DEQUANT_WIDE=1`
+   - _(Note: `STRATA_PF_FUSED`, `STRATA_PROMPT_ATTN_IMMA`, `STRATA_ATTN_DAILY`, `STRATA_GU_SWIGLU`, `STRATA_GR_UP75`, `STRATA_QSA_ROWS`, and `STRATA_SIDE_MIXER=2` are now automatic `sm_89` defaults in `0.1.66` via `engine/src/core/nv_defaults.cpp:75–103`.)_
+3. **Tuned `"args"`:** `--expert-profile D:\workspace\github\devxplay-forks\Strata\terminal\data\expert-profile.bin`, `--mtp-window 8192`, `--adapt-async 1`, `--host-core sibling`, `--prompt-cache-spread`, plus the calibrated flags (`--pcie-frac`, `--spec-min-p`, `--adapt-every`, `--adapt-swaps`, `--adapt-decay`).
 
 ### Step 3: Hardware Calibration
 
-> **Precondition — do not skip this.** A calibration is only valid if the machine is idle. The resident complement equals `available RAM − 6.25 GiB` (capped at 19.54), so a boot with other programs open measures a **different machine** and can pick the wrong values. **Require `>= 25.8 GiB` free RAM** (= 19.54 + 6.25) before running. A run below that threshold has produced a different `--pcie-frac` on this same machine; the two runs are compared in §8.
+> **Precondition:** Require **`>= 25.8 GiB` free RAM** on this PC (`19.54 + 6.25`) with no other heavy apps running. Lower free RAM reduces the resident complement and can pick the wrong `--pcie-frac` (§8).
+
+`START-HERE.bat --calibrate` scans `terminal\strata-*.json` only, and `terminal/tools/calibrate.py:252` passes `cfg["exe"]` verbatim to `StrataEngine` (without expanding `"component:strata-engine"`). Run calibration directly against root `strata-swift-iq2_xs.json` by resolving `"component:strata-engine"` in memory and resetting prior tuned flags via `CAL.apply(args, {})`:
 
 ```powershell
-.\START-HERE.bat --calibrate --family swift --model IQ2_XS --no-start
+$exe = Join-Path $env:LOCALAPPDATA "Strata\components\engine\0.1.66-windows-x86_64-cuda-cuda13\strata.exe"
+python -c "import copy, json, pathlib, sys; sys.path[:0] = [str(pathlib.Path('terminal').resolve()), str(pathlib.Path('terminal/tools').resolve())]; import calibrate as CAL; cfg = copy.deepcopy(json.loads(pathlib.Path('strata-swift-iq2_xs.json').read_text('utf-8-sig'))); cfg['exe'] = r'$exe'; cfg['args'] = CAL.apply(cfg['args'], {}); print(json.dumps(CAL.run(cfg), indent=1))"
 ```
 
-_(Sweeps the PCIe share, the draft floor, the CPU worker count and the adaptive tier. Takes ~10–30 min and 8–20 engine restarts. It applies values as a **per-request API parameter** (`tools/calibrate.py:210`, `sampling["strata_tune"]`), so the swept values never appear in the `engine started` log line — do not grep for them there. A value is kept only if it beats the engine's own default by more than 3% (`MIN_GAIN`).)_
+_(Takes ~10 min across PCIe share, draft floor, CPU workers, and adaptive tier; applies per-request `strata_tune` keys, keeping only settings that beat the baseline by `> 3%` `MIN_GAIN`. Write any winning `settings` back into `strata-swift-iq2_xs.json` while keeping `"exe": "component:strata-engine"`.)_
 
 ### Step 4: Run Server
 
 ```powershell
-.\START-HERE.bat --host 0.0.0.0 --api-key sk-strata-local --port 8081
+.\run-swift-iq2_xs.bat
 ```
+
+_(Launches `D:\workspace\github\devxplay-forks\Strata\terminal\serve\server.py` with `strata-swift-iq2_xs.json` on `0.0.0.0:8081`.)_
 
 ---
 
@@ -106,20 +88,21 @@ _(Sweeps the PCIe share, the draft floor, the CPU worker count and the adaptive 
 
 ### Daily Startup Command
 
-You do **NOT** need to rerun Setup (Step 1) or Calibration (Step 3) after reboots. Simply start the server:
+Run the server directly (no re-setup or re-calibration needed across reboots):
 
 ```powershell
-.\START-HERE.bat --host 0.0.0.0 --api-key sk-strata-local --port 8081
+.\run-swift-iq2_xs.bat
 ```
 
 ### Golden Health Verification Checklist
 
-When the server boots up, check the terminal / `strata-swift-iq2_xs.log` for these 4 golden lines:
+Confirm these lines in the console / `strata-swift-iq2_xs.log` after startup:
 
-1. `resident RAM mode: 19.5x–20.5x GiB of experts in RAM (locked)` — confirms the resident experts are locked in RAM with 0 SSD file stalls. **The number is not fixed:** it equals `available RAM − 6.25 GiB` (6 GiB `STRATA_RESIDENT_HEADROOM_GIB` + 0.25 margin), capped at 19.54 GiB. At ~26 GiB free you get the full ~20.5 GiB; at ~22 GiB free only ~15.7 GiB, and decode drops with it. **If you see 15.x, another program is holding RAM — close it and restart before judging speed.** This is RAM pressure, not an engine fault; the matched-RAM proof is in §8.
-2. `expert cache 10068 slots, 13.48 GiB of VRAM` — confirms GPU VRAM cache is fully populated (10067 or 10068; the draft head moves it by one).
-3. `the host thread on 1 (draining too) (--host-core sibling)` — confirms the host scheduler moved to Core 0 Thread 1, leaving Thread 0 free for Windows 11 GPU driver interrupts.
-4. `--expert-profile data/expert-profile-learned.bin` — confirms your real-world coding expert routing distribution is pre-loaded.
+1. `resident RAM mode: 19.5x–20.5x GiB of experts in RAM (locked)` — confirms resident experts are locked in RAM with 0 SSD file stalls (`available RAM − 6.25 GiB`, capped at `19.54 GiB`; requires `>= 25.81 GiB` free at launch, otherwise close memory-heavy apps and restart before judging speed).
+2. `expert cache ~9,595–10,068 slots, ~12.88–13.48 GiB of VRAM` — confirms GPU VRAM expert cache is populated (exact count shifts slightly across engine versions).
+3. `the host thread on 1 (draining too) (--host-core sibling)` — confirms host scheduler is pinned to Core 0 Thread 1, leaving Thread 0 free for Windows 11 GPU driver interrupts.
+4. `--expert-profile D:\workspace\github\devxplay-forks\Strata-data\expert-profile-learned.bin` — confirms your learned coding expert routing distribution loaded.
+5. `STRATA_ROUTE_TAIL_SKIP not set: off` — confirms exact routing (no tail-skipping) on `0.1.63+`, with ISO-8601 UTC-offset timestamps (`YYYY-MM-DDTHH:MM:SS+08:00`) on `progress`/`done` log lines.
 
 ### Config-Change Verification (Prompt Reuse / Conversation Cache)
 
@@ -137,11 +120,11 @@ When researching forums, GitHub issues, or AI suggestions months later, avoid th
 
 - ❌ **Do NOT enable `--kv-resident`**: On a 32 GB RAM machine, offloading KV cache to host RAM steals budget from resident experts, triggering massive SSD re-reads.
 - ❌ **Do NOT set `--conversation-cache-mib` > 0**: Parking a conversation needs its full snapshot (**1,036–3,124 MiB** at 100K–187K context) _plus_ the 2,560 MiB floor to fit in free RAM _at park time_. This machine has only **121–1,464 MiB** free then (19 GiB of experts locked + 6 GiB headroom), so every park is refused — one log shows `exceeds available budget` ×192 and `evicted 0, 0 still parked` ×49. Only 149–547-token conversations ever parked. Revisit only after the 64 GB upgrade.
-- ❌ **Do NOT hunt for a conversation-cache idle timeout**: There is none. `idle|ttl|expire` matches nothing in `serve/` or `include/`, and every refusal line reads `evicted 0` — nothing was ever cleared because nothing was ever stored. Waiting 10 minutes vs 10 hours changes nothing; reuse is lost when the client **rewrites its history** so no exact token-prefix match survives. `--prompt-cache-spread` is the fix for that, not a timer setting.
+- ❌ **Do NOT hunt for a conversation-cache idle timeout**: There is none. `idle|ttl|expire` matches nothing in `terminal/serve/` or `engine/include/`, and every refusal line reads `evicted 0` — nothing was ever cleared because nothing was ever stored. Waiting 10 minutes vs 10 hours changes nothing; reuse is lost when the client **rewrites its history** so no exact token-prefix match survives. `--prompt-cache-spread` is the fix for that, not a timer setting.
 - ❌ **Do NOT set `--prefill auto:32768`**: Official repo benchmarks (#834 #669) prove 32K prompt chunks run **~3x slower** on 32 GB RAM. Keep `--prefill auto` (8,192 chunk).
 - ❌ **Do NOT switch to `--draft dflash2`**: Requires an unbuilt model pack and consumes 1.2 GB VRAM; MTP with Gumbel noise already achieves 78%–88% acceptance on this card.
 - ❌ **Do NOT raise power limit to 510W (`nvidia-smi -pl 510`)**: Decode consumes only ~266W on the RTX 4090; raising power adds heat and fan noise with 0.0 tok/s gain.
-- ❌ **Do NOT run `UPDATE.bat` expecting a newer engine**: `setup.py:5371` returns early whenever the installed engine is `>= MIN_ENGINE`, which it already is on this machine, so `UPDATE.bat` prints "already installed" and fetches nothing. Use the §7 procedure instead.
+- ❌ **Do NOT rely on `UPDATE.bat` / `START-HERE.bat --update` to upgrade the engine**: `terminal/setup.py:6431` returns early whenever an engine is `>= MIN_ENGINE` (`(0, 1, 46)`), and `strata-swift-iq2_xs.json` uses `"component:strata-engine"` rather than `terminal\engine\`. Use **§7** instead.
 
 ## 4. Why Each Setting Was Chosen
 
@@ -152,28 +135,29 @@ When researching forums, GitHub issues, or AI suggestions months later, avoid th
 | `--vram-reserve-mib 1600`              | Fixed VRAM headroom            | **Eliminates WDDM page eviction cliff**. Prevents Windows 11 DWM from dropping speed from 50 tok/s to 2 tok/s on deep 100K-262K context.                                                                                                                                                   |
 | `--kv k8v4`                            | Mixed INT8 K + 4-bit V         | **Halves VRAM consumption for KV cache** over standard INT8, allowing full 262,144 context without blowing out 24 GB VRAM.                                                                                                                                                                 |
 | `context 262144`                       | Exact trained window           | Native context length; avoids RoPE scaling / YaRN degradation.                                                                                                                                                                                                                             |
-| `STRATA_PF_FUSED=1`                    | Fused int8 prompt kernels      | **+12% prompt speed at 4K, +3% at 32K** (`DETAILS.md:26-27`) by running prompt experts on tensor-core GEMMs.                                                                                                                                                                               |
+| `STRATA_PF_FUSED=1`                    | `0.1.66` `sm_89` default       | **+12% prompt speed at 4K, +3% at 32K** (`DETAILS.md:26-27`) by running native i-quant prompt experts on tensor-core GEMMs.                                                                                                                                                                 |
 | `--mtp-window 8192`                    | Bounded MTP attention          | Caps attention span during speculative draft verification to keep decode overhead low at long contexts.                                                                                                                                                                                    |
 | `--adapt-async 1`                      | Async expert swapping          | **+7% to +11% decode speed** (`DETAILS.md:202`) by asynchronously overlapping RAM-to-VRAM expert swaps with token decoding.                                                                                                                                                                |
 | `--host-core sibling`                  | SMT host core isolation        | Moves host scheduler to Core 0 SMT sibling (Logical Processor 1), leaving Processor 0 free for Windows 11 GPU driver interrupts (+3-5%).                                                                                                                                                   |
-| `STRATA_PIN_BY_NEED=1` / `PCIE_MIN1=1` | PCIe miss activation           | Fixes `pcie_share 0.0` symptom; forces PCIe lane to activate even for low miss counts (+5-7% prompt speed).                                                                                                                                                                                |
-| `STRATA_RESIDENT_HEADROOM_GIB=6`       | RAM headroom guard             | Prevents Windows 11 working set memory trimming on 32 GB RAM systems.                                                                                                                                                                                                                      |
-| `STRATA_SPEC_COUPLED=1`                | Coupled draft sampling         | Couples speculative draft RNG with target model distribution, raising draft acceptance rates to 68-75%.                                                                                                                                                                                    |
-| `--pcie-frac 0.75`                     | Empirical PCIe share           | Swept by calibration on an idle machine; 0.75 beat every other value, including 1.00. Full medians, and the two superseded RAM-starved picks, are in §8.                                                                                                                                   |
-| `--spec-min-p 0.70`                    | Acceptance threshold           | Swept by calibration; the highest value in the grid won. Measurements in §8.                                                                                                                                                                                                               |
-| `--adapt-swaps 160`                    | Adaptive tier swaps            | Confirmed by calibration: the adaptive tier is worth roughly +10% over leaving it off, and 160 swaps beat 80. Measurements in §8.                                                                                                                                                          |
-| `STRATA_SPEC_GUMBEL=1`                 | Gumbel-Max noise coupling      | Replaces softmax draft coupling with Gumbel-max noise matching, raising speculative draft acceptance rates with zero VRAM/RAM cost.                                                                                                                                                        |
-| `STRATA_RAM_ADAPT=2`                   | Dynamic resident RAM sync      | Swaps out dormant experts in the 18.22 GiB RAM pool with active conversation experts; cuts repeated SSD reads per token from 14 to ~2.7.                                                                                                                                                   |
-| `STRATA_RAM_ADAPT2=1`                  | Async RAM promotion I/O        | Stages RAM expert promotions in the background on a dedicated I/O thread, avoiding GPU decode stalls during RAM updates.                                                                                                                                                                   |
-| `STRATA_DEQUANT_WIDE=1`                | Ada wide dequantization        | Bypasses hardcoded `sm_86` default to enable 16-bit loads / 16-byte stores on RTX 4090 (Ada sm_89); cuts **11% to 15% off TTFT**.                                                                                                                                                          |
-| `STRATA_PROMPT_ATTN_IMMA=1`            | INT8 Tensor Core Attention     | Routes `--kv k8v4` attention matrix products directly into Ada 4th-Gen INT8 Tensor Cores; **+2.5% prompt prefill throughput**.                                                                                                                                                             |
-| `STRATA_ATTN_DAILY=1`                  | Warp-synchronous decode attn   | Replaces upstream chunked decode attention with warp-synchronous reduction kernel (+1.5% to +3% decode).                                                                                                                                                                                   |
-| `STRATA_GU_SWIGLU=1`                   | Fused gate/up + SwiGLU launch  | Fuses gate/up projection, SwiGLU activation, and Q8_1 quantization into a single CUDA kernel launch, cutting kernel launch overhead.                                                                                                                                                       |
-| `STRATA_GR_UP75=1`                     | Staged group-reduction up-proj | Optimizes multi-token verification window group-reduction up-projection via sm_75+ tensor-core staging (+1% to +1.5% decode).                                                                                                                                                              |
-| `STRATA_QSA_ROWS=1`                    | Low-query QSA block scores     | Optimizes QSA block score calculations for small query counts (NQ <= 4), reducing warp stalls during expert routing.                                                                                                                                                                       |
-| `STRATA_SIDE_MIXER=2`                  | Async side mixer execution     | Runs GDN gate projections and QSA indexing asynchronously on a secondary CUDA stream alongside layer projections.                                                                                                                                                                          |
-| `expert_profile_save`                  | Learned profile persistence    | Automatically saves the active expert routing table to `data/expert-profile-learned.bin` every 10 min and on exit; future launches load this file to eliminate the cold-start warmup ramp.                                                                                                 |
-| `--prompt-cache-spread`                | Geometric checkpoint spacing   | Keeps the 6 checkpoints thinned geometrically back from the end instead of clustered in the last ~2K tokens. An agent that rewrites history N tokens back re-reads ~N instead of the whole prompt (6K back: 8K not 200K; 42K back: 43K not 200K). **Zero extra RAM** — same 6 checkpoints. |
+| `STRATA_PIN_BY_NEED=1` / `PCIE_MIN1=1` | Opt-in PCIe miss activation    | Fixes `pcie_share 0.0` symptom; forces PCIe lane to activate even for low miss counts (+5-7% prompt speed).                                                                                                                                                                                |
+| `STRATA_RESIDENT_HEADROOM_GIB=6`       | Opt-in RAM headroom guard      | Prevents Windows 11 working set memory trimming on 32 GB RAM systems.                                                                                                                                                                                                                      |
+| `STRATA_SPEC_COUPLED=1`                | Opt-in coupled draft sampling  | Couples speculative draft RNG with target model distribution, raising draft acceptance rates to 68-75%.                                                                                                                                                                                    |
+| `--pcie-frac 0.20`                     | Empirical PCIe share           | Swept by calibration on an idle machine (`0.1.66`); `0.20` beat `0.75` and `1.00` (+6.7% over default). Full medians across `0.1.50`–`0.1.66` are in §8.                                                                                                                                   |
+| `--spec-min-p 0.70`                    | Acceptance threshold           | Swept by calibration (`0.70` won on `0.1.50`, `0.1.52`, and `0.1.66`). Measurements in §8.                                                                                                                                                                                                 |
+| `--adapt-swaps 160`                    | Adaptive tier swaps            | Confirmed by calibration (`+6.9%` on `0.1.66`, `~+10%` on `0.1.50`/`0.1.52` over default; `160` beat `80`). Measurements in §8.                                                                                                                                                             |
+| `STRATA_SPEC_GUMBEL=1`                 | Opt-in Gumbel-Max coupling     | Replaces softmax draft coupling with Gumbel-max noise matching, raising speculative draft acceptance rates with zero VRAM/RAM cost.                                                                                                                                                        |
+| `STRATA_RAM_ADAPT=2`                   | Opt-in resident RAM sync       | Swaps out dormant experts in the RAM pool with active conversation experts; cuts repeated SSD reads per token from 14 to ~2.7.                                                                                                                                                             |
+| `STRATA_RAM_ADAPT2=1`                  | Opt-in async RAM promotion I/O | Stages RAM expert promotions in the background on a dedicated I/O thread, avoiding GPU decode stalls during RAM updates.                                                                                                                                                                   |
+| `STRATA_DEQUANT_WIDE=1`                | Opt-in Ada wide dequantization | Enables 16-bit loads / 16-byte stores on RTX 4090 (Ada `sm_89`; engine default only enables `sm_61`); cuts **11% to 15% off TTFT**.                                                                                                                                                        |
+| `STRATA_PROMPT_ATTN_IMMA=1`            | `0.1.66` CUDA default          | Routes `--kv k8v4` attention matrix products directly into Ada 4th-Gen INT8 Tensor Cores; **+2.5% prompt prefill throughput**.                                                                                                                                                             |
+| `STRATA_ATTN_DAILY=1`                  | `0.1.66` `sm_89` default       | Warp-synchronous decode attention kernel (+1.5% to +3% decode; `nv_defaults.cpp:85`).                                                                                                                                                                                                     |
+| `STRATA_GU_SWIGLU=1`                   | `0.1.66` `sm_89` default       | Fuses gate/up projection, SwiGLU activation, and Q8_1 quantization into one CUDA kernel launch (`nv_defaults.cpp:87`).                                                                                                                                                                     |
+| `STRATA_GR_UP75=1`                     | `0.1.66` `sm_89` default       | Staged group-reduction up-projection via `sm_75+` tensor-core staging (+1% to +1.5% decode; `nv_defaults.cpp:86`).                                                                                                                                                                        |
+| `STRATA_QSA_ROWS=1`                    | `0.1.66` `sm_89` default       | Low-query QSA block score optimization (`NQ <= 4`; `nv_defaults.cpp:88`).                                                                                                                                                                                                                  |
+| `STRATA_SIDE_MIXER=2`                  | `0.1.66` `sm_89` default       | Async GDN gate projections and QSA indexing on a secondary CUDA stream (`nv_defaults.cpp:93`).                                                                                                                                                                                             |
+| `STRATA_ROUTE_TAIL_SKIP=0`             | `0.1.63+` engine default       | Exact routing (off by default since `0.1.63` / `0.2.17`); avoids the answer drift from `0.1.42`–`0.1.62` default rank `7`.                                                                                                                                                                |
+| `expert_profile_save`                  | Learned profile persistence    | Saves the active expert routing table to `D:\workspace\github\devxplay-forks\Strata-data\expert-profile-learned.bin` every 10 min and on exit; future launches load it to skip cold-start warmup.                                                                                            |
+| `--prompt-cache-spread`                | Geometric checkpoint spacing   | Keeps the 6 checkpoints thinned geometrically back from the end instead of clustered in the last ~2K tokens. **Zero extra RAM** — same 6 checkpoints.                                                                                                                                      |
 
 ---
 
@@ -231,99 +215,91 @@ When guiding over a phone or video call, walk through these exact screens and ke
 
 ## 7. Upgrading the Engine (Procedure)
 
-This section is the **procedure only** — it works for any future version. What was measured on each actual
-upgrade is recorded in **§8 Version Log**.
+Current upgrade procedure for `0.2.16+` (`"exe": "component:strata-engine"`). Record measured results from each actual upgrade in **§8 Version Log**.
 
-### 7.1 Why the two versions drift
+### 7.1 Source vs. Component Binary
 
-`git pull` updates the **source code only**. It never touches the engine binary: `engine/` is gitignored
-(`.gitignore:50`). Source and binary therefore move independently, and that is normal. Always check both:
+`git pull` / `git rebase` updates source code only; the running engine comes from `%LOCALAPPDATA%\Strata\components\engine\`. Always check both:
 
-| What       | How to check                                   | Meaning                         |
-| ---------- | ---------------------------------------------- | ------------------------------- |
-| Source     | `grep 'project(strata VERSION' CMakeLists.txt` | what the Python and docs expect |
-| **Binary** | `.\engine\strata.exe --version`                | **what actually runs**          |
+| What       | How to check                                                                                         | Meaning                     |
+| ---------- | ---------------------------------------------------------------------------------------------------- | --------------------------- |
+| Source     | `Select-String 'project\(strata VERSION' engine\CMakeLists.txt`                                      | what Python and docs expect |
+| **Binary** | `cd terminal && python strata.py update --no-control --check` (or `<component>\strata.exe --version`) | **what actually runs**      |
 
-The binary is the one that matters for performance. A source tree newer than the binary changes nothing until
-the binary is replaced.
-
-### 7.2 Find out what is available
+### 7.2 Check What Is Available
 
 ```powershell
+cd terminal
 python strata.py update --no-control --check
 ```
 
-Read-only; downloads nothing. In the JSON output, `engine.offered.version` is the newest package for this PC
-and `engine.installed` is what the updater currently manages. Two things to expect:
-
-- `engine.installed: null` on a source checkout — normal, see §7.4.
-- The newest _source_ version may be **higher** than the newest _engine package_. Engine packages are
-  published per family; a version bump can apply to one family and not another. Trust `offered`, not
-  `CMakeLists.txt`.
+Read-only; downloads nothing. Trust `offered` for this PC rather than `engine/CMakeLists.txt` (an engine version bump can target another model family).
 
 ### 7.3 Procedure
 
 ```powershell
-# 0. Stop the server — an update refuses while one is serving (exit code 7)
+# 0. Stop any running server — an update refuses while one is serving (exit code 7)
 taskkill /PID <server-pid> /T /F
 
-# 1. Record the old version, then back up the engine AND the tuned config
-$old = (Get-Content engine\BUILD.json -Raw | ConvertFrom-Json).version
-Rename-Item engine "engine-$old-backup"
+# 1. Back up the tuned config
 Copy-Item strata-swift-iq2_xs.json strata-swift-iq2_xs.json.bak
 
-# 2. Download, verify, test-start into the components store
-python strata.py update --no-control
+# 2. Download, verify signature/hashes, and switch the active component engine
+Push-Location terminal
+python strata.py update --no-control --yes
+Pop-Location
 
-# 3. See which package folder the store now holds
+# 3. Point vision.exe in strata-swift-iq2_xs.json to the new version folder
 Get-ChildItem "$env:LOCALAPPDATA\Strata\components\engine" -Directory | Select-Object Name
+# Update vision.exe -> %LOCALAPPDATA%\Strata\components\engine\<new-folder>\strata-vision.exe
 
-# 4. Copy it into engine\   (PowerShell, NOT cmd: %LOCALAPPDATA% does not expand there)
-$src = "$env:LOCALAPPDATA\Strata\components\engine\<folder-from-step-3>"
-New-Item -ItemType Directory -Force -Path engine | Out-Null
-Copy-Item "$src\*" engine\ -Recurse -Force
+# 4. Verify the active component binary prints the new version
+& "$env:LOCALAPPDATA\Strata\components\engine\<new-folder>\strata.exe" --version
 
-# 5. Fix BUILD.json: the store copy says "source": "<branch>"; setup needs "prebuilt"
-$b = Get-Content engine\BUILD.json -Raw | ConvertFrom-Json
-$b.source = "prebuilt"
-$b | ConvertTo-Json -Depth 8 | Set-Content engine\BUILD.json -Encoding utf8
-
-# 6. Verify the binary really changed (must print the NEW version)
-.\engine\strata.exe --version
-
-# 7. Re-calibrate — the engine identity changed (see the Step 3 precondition)
-.\START-HERE.bat --calibrate --family swift --model IQ2_XS --no-start
+# 5. Re-calibrate on this PC while idle (>= 25.8 GiB free RAM) — see §1 Step 3
 ```
 
-**Why step 5 is required:** `setup.py:5182` treats an engine whose `BUILD.json` does not say
-`"source": "prebuilt"` as one compiled on this machine, and will try to rebuild it.
+### 7.4 Keep `engine/` Source-Only
 
-### 7.4 Why the copy in step 4 cannot be skipped
+Since `0.2.16`, root `engine/` holds tracked C++ source files (not gitignored binaries), and `terminal/setup.py` manages its checkout engine under `terminal/engine/`. Because `strata-swift-iq2_xs.json` uses `"exe": "component:strata-engine"`, `terminal/serve/server.py:8957` reads `%LOCALAPPDATA%\Strata\components\engine\` directly — keep root `engine\` clean of downloaded `.exe`/`.dll` copies.
 
-`strata update` installs into `%LOCALAPPDATA%\Strata\components\`, which **this config never reads** — its
-`"exe"` points at this checkout's `engine\strata.exe`. That is why `--check` reports `"installed": null`.
+### 7.5 Preserve Custom Configs
 
-`setup.py` does contain a bridge that performs the copy automatically (`engine_from_feed`,
-`setup.py:4353-4401`), but it is unreachable: `get_prebuilt` returns early at `setup.py:5191` whenever the
-installed engine is `>= MIN_ENGINE`. There is no flag to force it, so the copy stays manual.
-
-### 7.5 Never use Step 1 Setup to "update"
-
-Setup rewrites `"args"` from its own answers and would reset `--spec-min-p` back to its own value (it is in
-`SETUP_CHOICE_FLAGS`, `setup.py:6311`). Other hand edits survive via `user_args` only because they appear
-**0 times** in `setup.py`. Use calibration, not setup.
+Upgrade via **§7.3** and tune via **§1 Step 3** (`calibrate.py`), rather than re-running Step 1 `--setup` (which rewrites `"args"` from setup defaults).
 
 ### 7.6 Rollback
 
-Keep `engine-<oldver>-backup\` until the new engine has run one full real session. To go back: stop the
-server, `Rename-Item engine "engine-<newver>"`, then `Rename-Item "engine-<oldver>-backup" engine`.
-`strata components rollback` only covers engines installed through the feed, not a source checkout.
+```powershell
+Push-Location terminal
+python strata.py components rollback
+Pop-Location
+```
 
----
+Then point `vision.exe` in `strata-swift-iq2_xs.json` back to the previous folder (or restore `strata-swift-iq2_xs.json.bak`).
 
 ## 8. Version Log (What Each Upgrade Actually Did)
 
 Append-only record. Newest first. Keep the procedure in §7 clean — evidence lives here.
+
+### 2026-11-23 — engine `0.1.52` → `0.1.66` (source `0.2.20`); re-calibrated on RTX 4090
+
+**What changed in the checkout & engine:** Rebased `main` onto `upstream/main` (`73d4f4196`, v`0.2.20`, 0.2.16+ layout with `terminal/serve/` and `terminal/data/`) and updated `strata` + `strata-vision` to **`0.1.66`** (`windows-x86_64-cuda-cuda13`, commit `2e87c08db18a`). `strata-swift-iq2_xs.json` uses `"exe": "component:strata-engine"`, and `vision.exe` was pointed to `0.1.66-windows-x86_64-cuda-cuda13\strata-vision.exe`. Learned routing profile moved outside the repo to `D:\workspace\github\devxplay-forks\Strata-data\expert-profile-learned.bin` (`196,632` bytes, `48×512`).
+
+**Defaults changed in `0.1.66` (`sm_89` / RTX 4090):**
+- `STRATA_ROUTE_TAIL_SKIP` is now **OFF (`0`) by default** on every backend (off since `0.1.63` / `0.2.17`; `0.1.42`–`0.1.62` defaulted to rank `7` on CUDA serve).
+- `engine/src/core/nv_defaults.cpp:75–103` now enables `STRATA_ATTN_DAILY=1`, `STRATA_GR_UP75=1`, `STRATA_GU_SWIGLU=1`, `STRATA_QSA_ROWS=1`, `STRATA_SIDE_MIXER=2`, `STRATA_ADAPT_LAG=2`, `STRATA_B6_MMVQ_ROWS=1`, `STRATA_HC_UPMIX=1`, `STRATA_Q80_ROWS1=1`, `STRATA_EXP_MODE=8`, `STRATA_DEQUANT_SIDE=1`, `STRATA_LFUSE=1`, `STRATA_PLE_COMPACT=1`, `STRATA_PLE_COPY_STREAM=1`, `STRATA_PF_FUSED_KQ=1`, `STRATA_PREFILL_CPU_SHARE_NT=32`, `STRATA_PREFILL_CPU_SHARE_MAX=6144`, and `STRATA_VERIFY_DEVICE_HITS=1` automatically on `sm_89` (`24 GB`). `STRATA_PROMPT_ATTN_IMMA=1` and `STRATA_PF_FUSED=1` (native i-quants) are also default-on for `sm_89`.
+
+**Calibration on `0.1.66`** (`2026-11-23`, `26.62 GiB` free RAM, idle PC, `9,595` VRAM expert slots / `12.88 GiB`, `565 s`; run via `terminal/tools/calibrate.py` with `"component:strata-engine"` resolved to `0.1.66\strata.exe` and `CAL.apply(args, {})` baseline):
+
+| Sweep | Result (tok/s, median unless noted) |
+| --- | --- |
+| PCIe share (`--pcie-frac`) | **0.20 = 112.2** (best, 98.9–112.7), 1.00 = 110.5, 0.90 = 109.2, 0.55 = 108.4, 0.00 = 107.5, **0.75 = 107.5** |
+| Draft floor (`--spec-min-p` at `0.20`) | **0.70 = 119.0** (best, 112.3–119.2), 0.50 = 112.4, 0.30 = 100.7 |
+| Confirmation (3 rounds) | `0.00/0.50`: `106.7, 111.2, 110.7` (med `110.7`) vs **`0.20/0.70`: `117.4, 118.1, 118.3` (med `118.1`, +6.7%)** |
+| CPU workers (`--pool-workers`) | **7 (default) = 120.6**, 5 = 109.4, 4 = 104.1, 2 = 80.8 → keep engine default |
+| Adaptive tier | default = 99.1, `1/80/0.97` = 102.5, **`1/160/0.97` = 105.9** (+6.9%) → keep `1 / 160 / 0.97` |
+
+**Net config change:** `--pcie-frac` `0.75` → **`0.20`** (`--spec-min-p 0.70` and `--adapt-every 1 --adapt-swaps 160 --adapt-decay 0.97` confirmed). Note: `terminal/tools/calibrate.py:252` passes `cfg["exe"]` verbatim to `StrataEngine`, so `"exe": "component:strata-engine"` must be resolved in-memory before calling `CAL.run(...)`.
 
 ### 2026-10-29 — parking reverted: single session only; timestamps in the log
 
